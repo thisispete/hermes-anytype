@@ -7,7 +7,7 @@ description: >
   cloud) Anytype space's native chat via its local REST API + SSE stream,
   and gives the agent live chat presence plus schema-driven tools to
   search/create/update the space's typed objects.
-author: pete.schirmer@gmail.com
+author: thisispete
 # Confirmed real and functionally required, not just a `hermes doctor` lint
 # nit -- see plugins/platforms/a2a/plugin.yaml in NousResearch/hermes-agent:
 # declaring tools here is what makes discovery import tools.py in contexts
