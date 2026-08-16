@@ -28,6 +28,10 @@
 
 services:
   anytype-cli-bootstrap:
+    # Once you've confirmed a working version, pin ANYTYPE_CLI_VERSION in
+    # your .env rather than trusting `latest` long-term -- reproducibility,
+    # and it removes version drift as a variable when debugging (beta
+    # round 2 couldn't fully rule it out, only found it unlikely).
     image: "ghcr.io/anyproto/anytype-cli:${ANYTYPE_CLI_VERSION:-latest}"
     restart: "no"
     volumes:
@@ -67,7 +71,15 @@ services:
           anytype auth create "$$ANYTYPE_CLI_ACCOUNT_NAME" > /root/.anytype/ACCOUNT_RECOVERY_KEY.txt 2>&1
           CREATE_STATUS=$$?
           chmod 600 /root/.anytype/ACCOUNT_RECOVERY_KEY.txt 2>/dev/null || true
-          sleep 2
+          # Low-confidence guess, not a confirmed fix: bumped from 2s to 5s
+          # in case the new identity needs more time to settle with the
+          # any-sync coordinator before this process (and its network
+          # session) is torn down. Beta round 2 hit a DeadlineExceeded/
+          # signature-invalid failure on the *next* container's auto-login
+          # against this same stored identity -- the UDP/QUIC buffer-size
+          # lead in docs/design.md Section 10 is the stronger suspect, this
+          # is just a cheap thing to also try.
+          sleep 5
           kill $$SERVER_PID 2>/dev/null || true
           wait $$SERVER_PID 2>/dev/null || true
           if [ $$CREATE_STATUS -ne 0 ]; then
@@ -87,6 +99,10 @@ services:
     # `docker logs`.
 
   anytype-cli:
+    # Once you've confirmed a working version, pin ANYTYPE_CLI_VERSION in
+    # your .env rather than trusting `latest` long-term -- reproducibility,
+    # and it removes version drift as a variable when debugging (beta
+    # round 2 couldn't fully rule it out, only found it unlikely).
     image: "ghcr.io/anyproto/anytype-cli:${ANYTYPE_CLI_VERSION:-latest}"
     restart: unless-stopped
     depends_on:
