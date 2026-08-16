@@ -32,36 +32,60 @@ is still needed before calling this production-ready; see
 
    ```bash
    docker compose -f docker-compose.anytype-bot.yml up -d
-   docker compose -f docker-compose.anytype-bot.yml exec anytype-cli /app/anytype auth apikey create hermes-integration
+   docker compose -f docker-compose.anytype-bot.yml exec anytype-cli anytype auth apikey create hermes-integration
    # from your desktop app: Share Space -> copy invite link
-   docker compose -f docker-compose.anytype-bot.yml exec anytype-cli /app/anytype space join "<invite-link>"
+   docker compose -f docker-compose.anytype-bot.yml exec anytype-cli anytype space join "<invite-link>"
    # then approve the join request in-app
    ```
 
 ## Install
 
-Drop this repo's `hermes_anytype/` directory into `<hermes-data>/plugins/`,
-where `<hermes-data>` is whatever *host* path your own Hermes Docker Compose
-file maps to the container's `/opt/data` — check the `volumes:` line for
-the `hermes` service in your own `docker-compose.yml`. **Don't assume
-`~/.hermes`:** that's just the example path in Hermes's own docs (and the
-one this README originally assumed) — real deployments map it to whatever
-the operator chose, and it commonly differs. No compose changes are needed
-either way, since `/opt/data` already covers `plugins/` alongside
-`skills/`/`sessions/`/etc.
+**Recommended — via Hermes's own plugin installer**, which handles enabling
+and safely prompts you per-variable for the `requires_env`/`optional_env`
+block in `plugin.yaml`, merging into your existing `.env` rather than
+overwriting it:
 
-No `pip install` step required inside Hermes's own environment: this plugin
-is deliberately built on `aiohttp`, which already ships with Hermes core —
-see [`anytype_client.py`](hermes_anytype/anytype_client.py)'s module
-docstring for why that matters (Hermes's official image treats its install
-tree as immutable at runtime, so a plugin with its own extra pip dependency
-would force a custom derived image just to use it).
+```bash
+hermes plugins install <path-or-url-to-this-repo>
+hermes plugins enable anytype-platform
+```
+
+The name `hermes plugins enable` expects is **`anytype-platform`** (from
+`plugin.yaml`'s `name:` field) — not `hermes_anytype` (the directory/package
+name). The two don't match; `hermes plugins enable hermes_anytype` won't
+work.
+
+**Manual alternative:** copy this repo's `hermes_anytype/` directory into
+`<HERMES_HOME>/plugins/`, where `HERMES_HOME` is wherever your Hermes
+container's data directory is actually mounted from on the host — check the
+`volumes:` line for the `hermes` service in your own `docker-compose.yml`.
+**Don't assume `~/.hermes`:** that's only Hermes's own docs' default example,
+not a guarantee — real deployments commonly point it elsewhere. No compose
+changes are needed either way, since that directory already covers
+`plugins/` alongside `skills/`/`sessions/`/etc. Plugin loading is opt-in by
+default (`config.yaml`'s `plugins.enabled: []`), so the manual path still
+needs `hermes plugins enable anytype-platform` afterward — Hermes won't load
+a plugin just because its directory exists.
+
+Either way, no `pip install` step is required inside Hermes's own
+environment: this plugin is deliberately built on `aiohttp`, which already
+ships with Hermes core — see
+[`anytype_client.py`](hermes_anytype/anytype_client.py)'s module docstring
+for why that matters (Hermes's official image treats its install tree as
+immutable at runtime, so a plugin with its own extra pip dependency would
+force a custom derived image just to use it).
 
 ## Configure
 
-Copy [`.env.example`](.env.example) to `.env` inside that same
-`<hermes-data>` directory, alongside Hermes's own config, and fill in the
-values from the bot-account setup above:
+If you installed via `hermes plugins install`/`enable` above, you're
+already done — that flow prompts for each `requires_env`/`optional_env`
+value from `plugin.yaml` and merges them into your existing `.env` safely.
+
+If you installed manually, **do not `cp .env.example .env`** — on a live
+Hermes instance, `<HERMES_HOME>/.env` almost certainly already holds
+unrelated secrets (other plugins' tokens, dashboard credentials, etc.), and
+that command would overwrite the whole file. Hand-merge these values into
+the existing file instead:
 
 ```bash
 ANYTYPE_API_KEY=...              # Hermes's own identity's API key, not yours
