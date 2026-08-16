@@ -1,0 +1,16 @@
+# Hermes plugin manifest.
+#
+# NOTE: field names/shape are a best guess following the config example in
+# documents/design.md §3 and Hermes's general plugin conventions — not yet
+# verified against Hermes's actual plugin-manifest schema (design.md §12,
+# next-step #2). Confirm before publishing.
+
+name: hermes-anytype
+version: 0.1.0
+description: >
+  Live chat presence and object/schema tools for a self-hosted Anytype space.
+entry_point: hermes_anytype:register
+kinds:
+  - platform
+  - tools
+license: MIT
