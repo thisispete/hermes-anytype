@@ -1,27 +1,29 @@
 # hermes-anytype
 
-A [Hermes](https://github.com/) plugin that gives Hermes a live chat presence
-inside a self-hosted [Anytype](https://anytype.io/) space, plus tools to
-search/create/update that space's typed objects — driven by live schema
-introspection, so it works against anyone's custom type setup with zero
-manual mapping.
+A Hermes plugin that gives Hermes a live chat presence inside a self-hosted
+[Anytype](https://anytype.io/) space, plus tools to search/create/update that
+space's typed objects — driven by live schema introspection, so it works
+against anyone's custom type setup with zero manual mapping.
 
-See [documents/design.md](documents/design.md) for the full design and
-rationale. **Status: scaffolded, not yet functional** — the Anytype-side REST
-client and tool logic are implemented and tested; the actual wiring into
-Hermes's plugin API (`ctx.register_platform()` / `ctx.register_tool()`) is
-stubbed pending confirmation of Hermes's literal plugin-authoring API
-surface (see the `TODO(confirm-hermes-api)` markers in
-[`hermes_anytype/__init__.py`](hermes_anytype/__init__.py) and
-[`hermes_anytype/gateway.py`](hermes_anytype/gateway.py)).
+See [docs/design.md](docs/design.md) for the full design and rationale.
+**Status:** built against Hermes's confirmed real plugin API (see
+[`hermes_anytype/adapter.py`](hermes_anytype/adapter.py) — verified against
+`NousResearch/hermes-agent`'s own shipped Mattermost/IRC plugins, not
+guessed). Not yet run against a live Anytype instance — manual verification
+is still needed before calling this production-ready; see
+[Development](#development).
 
 ## Prerequisites
 
-1. A running Hermes instance.
-2. A self-hosted Anytype instance with API access enabled.
+1. A running Hermes instance (this plugin targets Hermes's official Docker
+   image, `nousresearch/hermes-agent:latest` — see
+   [Hermes's Docker docs](https://hermes-agent.nousresearch.com/docs/user-guide/docker)).
+2. A self-hosted or cloud Anytype instance with the local API enabled
+   (self-hosting the sync backend is optional and orthogonal to this — the
+   local API works the same regardless of network mode).
 3. **A separate Anytype identity for Hermes itself**, invited into your
    space as its own member — otherwise every message posts under your own
-   profile, not "Hermes". See [design.md §10](documents/design.md#10-hermess-anytype-identity-bot-account-setup)
+   profile, not "Hermes". See [design.md §10](docs/design.md#10-hermess-anytype-identity-bot-account-setup)
    for the full `anytype-cli` walkthrough. Short version:
 
    ```bash
@@ -34,37 +36,38 @@ surface (see the `TODO(confirm-hermes-api)` markers in
 
 ## Install
 
-```bash
-pip install -e ".[dev]"
-```
-
-Drop the resulting package into `~/.hermes/plugins/platforms/hermes-anytype/`,
-or via Hermes's plugin installer if one exists by the time you read this —
-verify against current Hermes docs.
+Drop this repo's `hermes_anytype/` directory into `~/.hermes/plugins/` (which
+is the same directory the official Docker image mounts from `~/.hermes` on
+the host, so no compose changes are needed). No `pip install` step required
+inside Hermes's own environment: this plugin is deliberately built on
+`aiohttp`, which already ships with Hermes core — see
+[`anytype_client.py`](hermes_anytype/anytype_client.py)'s module docstring
+for why that matters (Hermes's official image treats its install tree as
+immutable at runtime, so a plugin with its own extra pip dependency would
+force a custom derived image just to use it).
 
 ## Configure
 
-Copy [`.env.example`](.env.example) to `.env` and fill in the values from the
-bot-account setup above (`ANYTYPE_API_KEY` / `ANYTYPE_API_BASE_URL` must
-point at *Hermes's own* node, not your desktop app's).
+Copy [`.env.example`](.env.example) to `.env` (in `~/.hermes/`, alongside
+Hermes's own config) and fill in the values from the bot-account setup
+above:
 
-```yaml
-anytype:
-  api_key: ${ANYTYPE_API_KEY}
-  api_base_url: ${ANYTYPE_API_BASE_URL}
-  space_id: ${ANYTYPE_SPACE_ID}
-  channels:
-    - chat_id: "..."
-      mode: mention        # or: all
-      trigger: "@hermes"   # only used when mode: mention
+```bash
+ANYTYPE_API_KEY=...              # Hermes's own identity's API key, not yours
+ANYTYPE_API_BASE_URL=http://127.0.0.1:31012
+ANYTYPE_SPACE_ID=...
+
+# optional
+ANYTYPE_CHATS=                   # comma-separated chat_ids; blank = auto-discover all
+ANYTYPE_REQUIRE_MENTION=true     # false = respond to everything, everywhere
+ANYTYPE_MENTION_TRIGGER=@hermes
+ANYTYPE_FREE_RESPONSE_CHATS=     # comma-separated chat_ids that ignore REQUIRE_MENTION
 ```
 
-Each chat in the space gets its own response mode:
-
-- **`mention`** (default) — Hermes only replies when addressed by the
-  `trigger` string. Good for a shared team room.
-- **`all`** — Hermes replies to everything in that chat. Good for a solo
-  space, or a dedicated help room.
+`ANYTYPE_REQUIRE_MENTION=true` (the default) means Hermes only replies when
+addressed by `ANYTYPE_MENTION_TRIGGER` — good for a shared team room. Set it
+`false`, or list specific chats in `ANYTYPE_FREE_RESPONSE_CHATS`, for a solo
+space or a dedicated help room where every message should get a reply.
 
 ## Development
 
@@ -73,12 +76,19 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Tests cover the Anytype REST client (mocked HTTP via `respx`), the
-property-validation/normalization logic in `tools.py`, per-chat
-mention/reply-all filtering in `gateway.py`, and config validation. There's
-no CI coverage against a real Anytype instance (impractical to run one in
-CI) — manual verification against a live self-hosted instance is still
-needed before this is production-ready.
+Tests cover the Anytype REST client (against a real local `aiohttp.web` test
+server, not a mocking library — see
+[`tests/test_anytype_client.py`](tests/test_anytype_client.py) for why),
+the property-validation/normalization logic and tool handlers in `tools.py`,
+and the mention/reply-all filtering and env-config logic in `env_config.py`.
+
+`hermes_anytype/adapter.py` — the actual `BasePlatformAdapter` subclass —
+can't be unit-tested in this repo: it imports `gateway.config` /
+`gateway.platforms.base`, which only exist inside a real Hermes install (see
+the module's docstring). That's also true of a real Anytype instance in CI
+(impractical to run one). Both need manual verification against a live
+Hermes + Anytype setup before this is production-ready — there's no way
+around that for either half.
 
 ## License
 

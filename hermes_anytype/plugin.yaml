@@ -1,16 +1,40 @@
-# Hermes plugin manifest.
-#
-# NOTE: field names/shape are a best guess following the config example in
-# documents/design.md §3 and Hermes's general plugin conventions — not yet
-# verified against Hermes's actual plugin-manifest schema (design.md §12,
-# next-step #2). Confirm before publishing.
-
-name: hermes-anytype
+name: anytype-platform
+label: Anytype
+kind: platform
 version: 0.1.0
 description: >
-  Live chat presence and object/schema tools for a self-hosted Anytype space.
-entry_point: hermes_anytype:register
-kinds:
-  - platform
-  - tools
-license: MIT
+  Anytype gateway adapter for Hermes Agent. Connects to a self-hosted (or
+  cloud) Anytype space's native chat via its local REST API + SSE stream,
+  and gives the agent live chat presence plus schema-driven tools to
+  search/create/update the space's typed objects.
+author: pete.schirmer@gmail.com
+requires_env:
+  - name: ANYTYPE_API_KEY
+    description: "API key for Hermes's own Anytype identity -- see docs/design.md §10 for setup"
+    prompt: "Anytype API key"
+    password: true
+  - name: ANYTYPE_API_BASE_URL
+    description: "Local API base URL for the node running Hermes's identity (e.g. http://127.0.0.1:31012)"
+    prompt: "Anytype API base URL"
+    password: false
+  - name: ANYTYPE_SPACE_ID
+    description: "The target space's ID"
+    prompt: "Anytype space ID"
+    password: false
+optional_env:
+  - name: ANYTYPE_CHATS
+    description: "Comma-separated chat_ids to monitor. Unset = auto-discover all chats in the space."
+    prompt: "Chat IDs to monitor (comma-separated, blank for all)"
+    password: false
+  - name: ANYTYPE_REQUIRE_MENTION
+    description: "Require the mention trigger in monitored chats (default true). Set false for free-response everywhere."
+    prompt: "Require mention? (true/false)"
+    password: false
+  - name: ANYTYPE_MENTION_TRIGGER
+    description: "Trigger string for mention mode. Default: @hermes"
+    prompt: "Mention trigger"
+    password: false
+  - name: ANYTYPE_FREE_RESPONSE_CHATS
+    description: "Comma-separated chat_ids that respond to everything regardless of ANYTYPE_REQUIRE_MENTION"
+    prompt: "Free-response chat IDs (comma-separated)"
+    password: false

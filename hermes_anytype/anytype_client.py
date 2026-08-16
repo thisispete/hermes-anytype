@@ -1,9 +1,16 @@
 """Thin async REST + SSE wrapper over the Anytype local HTTP API.
 
-Covers the subset of the API this plugin needs (see documents/design.md §9):
+Built on aiohttp rather than httpx deliberately: aiohttp already ships inside
+Hermes's own runtime (see docs/design.md §12), so a plugin built on it needs
+no extra pip install — important because Hermes's official Docker image
+treats its install tree as immutable at runtime (no lazy installs), so any
+plugin dependency not already bundled would force every Docker user to build
+a derived image just to use this plugin.
+
+Covers the subset of the API this plugin needs (see docs/design.md §9):
 search, type/property introspection, object writes, and chat. Deliberately
 dumb — no caching, no retry-with-backoff here (that's layered on top by
-callers per the error-handling table in design.md §6).
+callers per the error-handling table in docs/design.md §6).
 """
 
 from __future__ import annotations
@@ -13,8 +20,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-from httpx_sse import aconnect_sse
+import aiohttp
 
 ANYTYPE_API_VERSION = "2025-11-08"
 
@@ -34,21 +40,36 @@ class AnytypeConfig:
 
 
 class AnytypeClient:
-    """One instance per configured space (see design.md §2: single space per config)."""
+    """One instance per configured space (see docs/design.md §2: single space per config).
+
+    The aiohttp session is created lazily on first use rather than in
+    __init__, since __init__ may run outside a running event loop (e.g. at
+    plugin registration time).
+    """
 
     def __init__(self, config: AnytypeConfig, *, timeout: float = 30.0) -> None:
         self._config = config
-        self._client = httpx.AsyncClient(
-            base_url=config.base_url.rstrip("/"),
-            headers={
-                "Authorization": f"Bearer {config.api_key}",
-                "Anytype-Version": ANYTYPE_API_VERSION,
-            },
-            timeout=timeout,
-        )
+        self._timeout = aiohttp.ClientTimeout(total=timeout)
+        self._session: aiohttp.ClientSession | None = None
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self._config.api_key}",
+            "Anytype-Version": ANYTYPE_API_VERSION,
+        }
+
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                base_url=self._config.base_url.rstrip("/"),
+                headers=self._headers(),
+                timeout=self._timeout,
+            )
+        return self._session
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
 
     async def __aenter__(self) -> "AnytypeClient":
         return self
@@ -57,18 +78,20 @@ class AnytypeClient:
         await self.aclose()
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        response = await self._client.request(method, path, **kwargs)
-        if response.status_code >= 400:
-            try:
-                payload = response.json()
-                message = payload.get("error", response.text)
-            except ValueError:
-                payload = None
-                message = response.text
-            raise AnytypeAPIError(response.status_code, message, payload)
-        if not response.content:
-            return None
-        return response.json()
+        session = await self._ensure_session()
+        async with session.request(method, path, **kwargs) as response:
+            body = await response.read()
+            if response.status >= 400:
+                try:
+                    payload = json.loads(body) if body else None
+                    message = payload.get("error", body.decode()) if payload else ""
+                except (ValueError, UnicodeDecodeError):
+                    payload = None
+                    message = body.decode(errors="replace")
+                raise AnytypeAPIError(response.status, message, payload)
+            if not body:
+                return None
+            return json.loads(body)
 
     # -- Schema introspection --------------------------------------------
 
@@ -218,17 +241,48 @@ class AnytypeClient:
     ) -> AsyncIterator[dict[str, Any]]:
         """Yields decoded SSE events: {"event": "message_added", "data": {...}}.
 
-        Reconnect/backoff is the gateway's responsibility (design.md §6) —
-        this just yields events for as long as the connection stays open.
+        Hand-rolled SSE parsing rather than a dependency like httpx-sse — see
+        the module docstring for why this plugin avoids non-bundled deps.
+        The format is simple enough not to need a library: ``event:``/``data:``
+        lines, blank-line-terminated, ``:``-prefixed comment lines as
+        heartbeats. Reconnect/backoff is the adapter's responsibility
+        (docs/design.md §6) — this just yields events for as long as the
+        connection stays open.
         """
         path = f"/v1/spaces/{self._config.space_id}/chats/{chat_id}/messages/stream"
         headers = {"Anytype-Heartbeat-Seconds": str(heartbeat_seconds)}
-        async with aconnect_sse(self._client, "GET", path, headers=headers) as event_source:
-            async for sse in event_source.aiter_sse():
-                if not sse.data:
-                    continue  # heartbeat comment line
+        session = await self._ensure_session()
+        async with session.get(path, headers=headers) as response:
+            response.raise_for_status()
+            async for event in parse_sse_lines(response.content):
+                yield event
+
+
+async def parse_sse_lines(lines: AsyncIterator[bytes]) -> AsyncIterator[dict[str, Any]]:
+    """Parse raw SSE wire lines into {"event": ..., "data": ...} dicts.
+
+    Pulled out of stream_chat_messages so it's testable against a plain
+    async iterator of bytes, with no HTTP mocking required.
+    """
+    event_name = "message"
+    data_lines: list[str] = []
+    async for raw_line in lines:
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\n").rstrip("\r")
+        if line == "":
+            if data_lines:
+                raw_data = "\n".join(data_lines)
                 try:
-                    data = json.loads(sse.data)
+                    data = json.loads(raw_data)
                 except json.JSONDecodeError:
-                    continue
-                yield {"event": sse.event, "data": data}
+                    data = None
+                if data is not None:
+                    yield {"event": event_name, "data": data}
+            event_name = "message"
+            data_lines = []
+            continue
+        if line.startswith(":"):
+            continue  # heartbeat/comment line
+        if line.startswith("event:"):
+            event_name = line[len("event:"):].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[len("data:"):].strip())

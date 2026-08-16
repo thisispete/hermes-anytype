@@ -1,16 +1,16 @@
 # hermes-anytype — Design & Roadmap
 
-**Status:** Design approved in conversation, not yet implemented. This document is the source of truth for standing up a new repo.
+**Status:** Implemented against Hermes's confirmed real plugin API (verified against `NousResearch/hermes-agent`'s own shipped Mattermost/IRC plugins — see §12). Not yet run against a live Anytype instance.
 **License:** MIT
 **Repo name:** `hermes-anytype`
 
 ## 1. What this is
 
-A Hermes plugin that gives Hermes (a) a live chat presence inside a self-hosted Anytype space, and (b) tools to search/create/update that space's typed objects — both driven by live schema introspection against the Anytype API, so it works against anyone's custom type setup (Person/Company/Task, or anything else) with zero manual mapping. Meant to be a genuine open-source community project, not a personal script: real README, clear config, sane defaults, MIT license.
+A Hermes plugin that gives Hermes (a) a live chat presence inside a self-hosted Anytype space, and (b) tools to search/create/update that space's typed objects — both driven by live schema introspection against the Anytype API, so it works against anyone's custom type setup (Person/Company/Task, or anything else) with zero manual mapping. Meant to be a genuine open-source community project, not a personal script: real README, clear config, sane defaults, MIT license — but not something with an ongoing maintenance commitment behind it; built for funzies and as a portfolio piece, published so others can fork and run with it if they want to. That stance shapes a few calls below: reasonable scope cutoffs over gold-plating (§6, §12), no attempt to track or cross-reference adjacent community projects (§4.2).
 
 ### Origin / motivation
 
-Built out of a real use case: modeling a job-hunt pipeline (Company → Role → Interview objects, replacing a hand-maintained `job-hunt-status.md` dashboard with a live filtered/grouped view) and wanting an agent that can both talk about that data in Anytype's native chat and keep it organized on your behalf, the way Hermes already does for an Obsidian vault today (see `obsidian-mcp` in the docker media-stack repo for the prior-art pattern this replaces/extends).
+Built out of a real use case: tracking a multi-stage pipeline of custom object types (e.g. Company → Role → Interview) in place of a hand-maintained markdown dashboard, and wanting an agent that can both talk about that data in Anytype's native chat and keep it organized on your behalf — the same pattern Hermes already applies to other personal knowledge-base platforms via its plugin ecosystem, just extended to Anytype's typed-object model. The live-introspection design (§2) means this works against *any* type schema, not just the one that motivated it — Person/Company/Task, or anything else a user has set up.
 
 ## 2. Scope decisions (settled)
 
@@ -22,53 +22,62 @@ These were deliberately chosen over alternatives during design — don't re-liti
 - **Ships as a genuine Hermes platform-adapter plugin** (`ctx.register_platform()`), not a standalone bridge service. Requires a running Hermes instance; in exchange it gets Hermes's existing tool loop, memory, and retry handling for free. Confirmed Hermes plugins can register a platform adapter *and* tools from the same package in one `register(ctx)` call.
 - **Single Anytype space per config.** Multiple spaces = multiple config blocks, not a list-of-spaces schema. Keeps the config and mental model simple.
 - **Per-chat response mode, not global.** Each `chat_id` in the space gets its own setting: `mention` (only responds when addressed, e.g. `@hermes`) or `all` (responds to everything). Default is `mention`. This maps directly onto real usage patterns: a solo second-brain space sets its one chat to `all`; a team space sets a shared room to `mention` and a dedicated help room to `all`. Confirmed Anytype has no separate DM primitive — a space just has one or more `chat_id`s (`list-chats`/`create-chat`), so this per-chat config is the only lever needed.
-- **Free writes by default.** The agent creates/updates objects autonomously when it decides to (matches how the user already runs `obsidian-mcp` today) — no opt-in write-permission gate for v1.
+- **Free writes by default.** The agent creates/updates objects autonomously when it decides to — no opt-in write-permission gate for v1. Revisit if real-world usage shows this needs a confirmation step for destructive edits.
 - **Naming:** `hermes-anytype`.
 
 ## 3. Architecture
 
-One Python package, following Hermes's own plugin conventions:
+One Python package, following Hermes's own real plugin conventions (confirmed against `plugins/platforms/mattermost/` and `plugins/platforms/irc/` in `NousResearch/hermes-agent` — see §12):
 
 ```
 hermes_anytype/
 ├── plugin.yaml
-├── __init__.py          # register(ctx) — registers platform + tools
-├── gateway.py            # the chat platform adapter (SSE listen, reply post)
-├── tools.py               # search_objects / create_object / update_object / get_type
-└── anytype_client.py      # thin REST + SSE wrapper over the Anytype API
+├── __init__.py          # register(ctx) — registers platform + tools (Hermes-agnostic import, defers adapter import)
+├── adapter.py            # AnytypeAdapter(BasePlatformAdapter) — SSE listen, reply post
+├── env_config.py          # pure env/mention-filter logic, deliberately free of any Hermes import (so it's unit-testable standalone)
+├── tools.py               # search_objects / create_object / update_object / get_type + Hermes handler wrappers
+└── anytype_client.py      # thin REST + SSE wrapper over the Anytype API, built on aiohttp (already bundled with Hermes — see its docstring)
 ```
 
-`register(ctx)` calls both `ctx.register_platform("anytype", ...)` and `ctx.register_tool(...)` for each tool in the toolset — one package, two registration surfaces, using Hermes's documented multi-kind plugin support directly.
+`register(ctx)` calls both `ctx.register_platform(name="anytype", ...)` and `ctx.register_tool(...)` for each tool — one package, two registration surfaces, confirmed real (not guessed) against `hermes_cli/plugins.py`'s `PluginContext.register_platform`/`register_tool`.
 
 ### Config shape
 
-```yaml
-anytype:
-  api_key: ${ANYTYPE_API_KEY}
-  api_base_url: http://127.0.0.1:31009      # or ANYTYPE_API_BASE_URL for anytype-cli (31012)
-  space_id: ${ANYTYPE_SPACE_ID}
-  channels:
-    - chat_id: "..."
-      mode: mention        # or: all
-      trigger: "@hermes"   # only used when mode: mention
+Confirmed real: Hermes's platform plugins are configured via env vars (`plugin.yaml`'s `requires_env`/`optional_env`), not a nested custom YAML block — the original guess below was wrong in shape, right in spirit:
+
+```bash
+ANYTYPE_API_KEY=...
+ANYTYPE_API_BASE_URL=http://127.0.0.1:31012   # Hermes's own bot identity's node, not the user's desktop app
+ANYTYPE_SPACE_ID=...
+
+# optional
+ANYTYPE_CHATS=                    # comma-separated chat_ids; blank = auto-discover all
+ANYTYPE_REQUIRE_MENTION=true
+ANYTYPE_MENTION_TRIGGER=@hermes
+ANYTYPE_FREE_RESPONSE_CHATS=      # comma-separated chat_ids that ignore REQUIRE_MENTION (mirrors Mattermost's MATTERMOST_FREE_RESPONSE_CHANNELS)
 ```
 
 ## 4. Components
 
-### 4.1 Gateway (`gateway.py`)
+### 4.1 Adapter (`adapter.py`)
 
-- Holds the SSE stream (`GET /v1/spaces/{space_id}/chats/{chat_id}/messages/stream`) per configured chat.
-- **Implementation note:** follow whatever persistent-connection primitive Hermes's other 27+ gateways already use internally (Discord's websocket, Telegram's long-poll are presumably built on a shared background-task primitive inside `register_platform`) — confirm the exact API from Hermes's plugin-authoring reference during implementation rather than inventing a new lifecycle pattern.
-- On `message_added`: check that chat's `mode`. If `mention`, look for the trigger — prefer Anytype's structural mention tracking if the message/mark format exposes it (the API has a distinct `mentions` read-state via `read-chat-messages`'s `type` param, suggesting real structural mention support; the exact `TextMark` shape for a mention isn't nailed down in the OpenAPI schema as a strict enum, so **verify empirically against a running instance** before committing to structural-only detection — fall back to substring match on message text if needed). If `all`, always proceed.
-- Feeds matching messages into Hermes's normal turn/response pipeline as this platform's inbound message.
-- Posts Hermes's reply via `POST /v1/spaces/{space_id}/chats/{chat_id}/messages`, using `reply_to_message_id` for threading.
-- **Reconnect:** exponential backoff on SSE drop; resume via cursor-based pagination (`after_order_id`) rather than replaying history.
+`AnytypeAdapter` subclasses `gateway.platforms.base.BasePlatformAdapter`, confirmed against the real base class and the shipped Mattermost/IRC adapters. Only `connect()`, `disconnect()`, and `send()` are actually `@abstractmethod` on the base class; `send_typing()`/`get_chat_info()` are implemented too for good citizenship (the former is a no-op — Anytype's chat API has no typing-indicator endpoint).
+
+- Third-party plugins were never added to Hermes core's `Platform` enum, but that enum has a `_missing_()` hook that creates a dynamic pseudo-member for any name already registered in `platform_registry` — so `Platform("anytype")` works in `__init__` for the same reason `Platform("irc")` works in the real IRC plugin: `register_platform(name="anytype", ...)` has already run by the time the adapter is constructed.
+- `connect()` spawns one background `asyncio.Task` per configured chat (from `ANYTYPE_CHATS`, or auto-discovered via `list-chats` if unset), each holding an SSE stream (`GET /v1/spaces/{space_id}/chats/{chat_id}/messages/stream`) with exponential-backoff reconnect on drop.
+- On `message_added`: mention/reply-all filtering is a real substring match (`env_config.should_respond`) — structural mention tracking via Anytype's `TextMark` shape was flagged as unverified against a running instance and was never confirmed, so the substring fallback described in the original design is what actually shipped, not a stopgap.
+- Matching messages become a `MessageEvent` (built via `self.build_source(...)`) and get handed to Hermes's own turn pipeline via `self.handle_message(event)` — Hermes owns session/auth/turn plumbing entirely past that point.
+- Replies go out via `send()` → `POST /v1/spaces/{space_id}/chats/{chat_id}/messages`, using `reply_to_message_id` for threading. Sent message IDs are tracked in a bounded cache so the adapter can filter its own messages back out of the SSE stream (avoids a reply loop) without needing to resolve "my own member ID" from the API.
 
 ### 4.2 Tools (`tools.py` + `anytype_client.py`)
 
+Registered as `anytype_search_objects` / `anytype_get_type` / `anytype_create_object` / `anytype_update_object` via `ctx.register_tool(name, toolset, schema, handler, is_async=True, ...)` — confirmed real against `hermes_cli/plugins.py`. Hermes's tool registry dispatches with `handler(args: dict, **kwargs) -> dict`, so each tool's core logic (Hermes-agnostic, independently testable) is wrapped in a thin `handler(args, **kwargs)` closure in `tools.py`'s `make_tool_handlers()`.
+
 - `search_objects(query, types?)` — wraps `POST /v1/spaces/{space_id}/search` (the `types` filter narrows to specific type keys; `type_key` values for the tool's own schema enum are refreshed once per conversation, not per message, not cached to disk).
-- `create_object(type_key, name, properties)` / `update_object(object_id, properties)` — **the key correctness design**: the handler internally calls `get-type` / `list-properties` itself, before ever submitting to Anytype, to validate and normalize the `properties` keys the LLM supplied. This lookup is invisible to the LLM's context (an HTTP round-trip inside the handler, not a tool call) — it costs latency, not tokens. If a property key doesn't match, return one corrective tool-result error to the LLM (`"'assignee' not found on type 'task' — did you mean 'assigned_to'? Available: assigned_to, due_date, status."`) instead of forwarding a bad write or raising an exception that kills the turn.
+- `create_object(type_key, name, properties)` / `update_object(object_id, properties)` — **the key correctness design**: the handler internally calls `get-type` / `list-properties` itself, before ever submitting to Anytype, to validate and normalize the `properties` keys the LLM supplied. This lookup is invisible to the LLM's context (an HTTP round-trip inside the handler, not a tool call) — it costs latency, not tokens. If a property key doesn't match, the wrapper catches `PropertyValidationError` and returns `{"error": "'assignee' not found on type 'task'. Available: assigned_to, due_date, status."}` as the tool result instead of forwarding a bad write or raising an exception that kills the turn.
 - `get_type(type_key)` — optional, LLM-visible, for cases where the agent wants to explain a schema conversationally. Not required for the write path's correctness (that's handled server-side per above).
+
+**Scope note:** a third-party Hermes skill, `clawhub/anytype` (`Foolafroos/anytype-hermes-skill`), already wraps the official `anyproto/anytype-mcp` server for pull-based object CRUD — meaningful overlap with this section. Deliberately kept independent rather than deferring to it: this plugin doesn't depend on Node.js or a second MCP server process, and the validation design above is more correctness-focused than a generic MCP passthrough. No cross-reference to that skill is maintained in this repo's docs — this is a low-stakes/portfolio project, not something with a maintenance commitment to keep such a reference current.
 
 This design was chosen specifically to balance two competing concerns raised during brainstorming: **context/token cost** (don't dump full schema into every turn or require a visible discover-then-retry tool-call dance) vs. **risk of the LLM guessing a wrong property key** (don't let bad guesses silently reach Anytype or surface as confusing raw API errors). Pushing validation into the handler, invisible to context, resolves both.
 
@@ -88,7 +97,7 @@ Anytype SSE event (message_added)
 
 | Failure | Behavior |
 |---|---|
-| SSE disconnect (network blip, Anytype restart) | Exponential-backoff reconnect; resume from `after_order_id` cursor, don't replay history |
+| SSE disconnect (network blip, Anytype restart) | Exponential-backoff reconnect. **Simpler than originally planned:** reconnects to a fresh live stream rather than resuming from an `after_order_id` cursor -- messages sent during the disconnect window can be missed, but a full history replay is avoided either way. Cursor-based gapless resume is a real enhancement, not implemented (§12) -- didn't seem worth the added complexity for this project's scope (§1's "for funzies" framing). |
 | Bad/revoked API key | Fail loud at plugin startup with a clear config error — never silently no-op |
 | Property validation mismatch on write | Corrective tool-result error back to the LLM (see §4.2), not an exception |
 | Anytype 5xx / rate limit | Bounded retry-with-backoff in `anytype_client.py`, not infinite |
@@ -103,7 +112,8 @@ Anytype SSE event (message_added)
 ## 8. Distribution
 
 - MIT license.
-- README covering: prerequisites (running Hermes + self-hosted Anytype with API access enabled), install steps (drop into `~/.hermes/plugins/platforms/hermes-anytype/`, or via Hermes's plugin installer if one exists by the time this is built — verify at implementation time), the config example from §3, and a plain-language explanation of mention-mode vs. reply-all mode with the "solo space vs. team room" framing from §2.
+- Confirmed real (not a guess): Hermes's official Docker image (`nousresearch/hermes-agent:latest`) mounts a single host `~/.hermes` → container `/opt/data`, which already covers `plugins/` alongside `skills/`/`sessions/`/etc — so dropping this plugin into `~/.hermes/plugins/` needs zero compose changes. The image treats its install tree as immutable at runtime ("no lazy installs"), which is *why* `anytype_client.py` is built on `aiohttp` (already bundled with Hermes core) instead of `httpx`/`httpx-sse`: a plugin with its own extra pip dependency would force every Docker user to build and maintain a derived image just to use it. Directory-drop plugins (this one) also need no pip-install step at all, even outside Docker, since Hermes imports the plugin directory directly rather than via a package manager.
+- README covers: prerequisites (running Hermes + Anytype with local API access — self-hosting the sync backend specifically is optional, orthogonal, and not required), install (drop-in, no pip step), the real env-var config from §3, and mention-mode vs. reply-all framing from §2.
 
 ## 9. Technical reference (verified against the live Anytype API spec, 2025-11-08 version)
 
@@ -155,8 +165,9 @@ Captured for whoever picks this up later, since they were seriously discussed:
 
 ## 12. Next steps
 
-1. Bootstrap the actual repo (`git init`, `LICENSE` (MIT), this file as `docs/design.md` or `ROADMAP.md`, standard `.gitignore` for Python).
-2. Confirm Hermes's exact plugin-authoring API surface (the precise signatures for `ctx.register_platform()` / `ctx.register_tool()`, and the background-task primitive gateways use for persistent connections) against Hermes's current plugin-development docs — the design above is correct in shape but implementation needs the literal method signatures.
-3. Spin up a self-hosted Anytype instance to verify the mention-mark shape empirically (§4.1, §9) before finalizing mention-detection logic.
-4. Stand up the actual Hermes bot identity via `anytype-cli` per §10, and verify empirically whether the account name flows through as the space's display name, or needs setting separately.
-5. Once verified, this doc is ready to hand to the `writing-plans` process for a step-by-step implementation plan.
+1. ~~Bootstrap the actual repo~~ — done: `git init`, MIT `LICENSE`, this file at `docs/design.md`, `.gitignore`.
+2. ~~Confirm Hermes's exact plugin-authoring API surface~~ — done, against real source rather than docs (Hermes's own docs page for this was incomplete): cloned `NousResearch/hermes-agent` and read `hermes_cli/plugins.py` (`register_platform`/`register_tool` signatures), `gateway/platforms/base.py` (`BasePlatformAdapter`, `MessageEvent`, `SendResult`, the `Platform` enum's `_missing_()` dynamic-member hook), and the shipped `plugins/platforms/mattermost/` + `plugins/platforms/irc/` adapters as real templates. `adapter.py`/`tools.py`/`__init__.py`/`plugin.yaml` are now built against that, not a guess.
+3. **Still open:** spin up a self-hosted Anytype instance to verify the mention-mark shape empirically (§4.1, §9) — the shipped adapter uses the substring-match fallback since this was never verified; upgrading to structural mention detection needs a live instance.
+4. **Still open:** stand up the actual Hermes bot identity via `anytype-cli` per §10, and verify empirically whether the account name flows through as the space's display name, or needs setting separately.
+5. **Still open, deliberately deprioritized (§1):** cursor-based SSE resume (`after_order_id`) instead of reconnecting to a fresh live stream on drop (§6). A real gap, not a blocker.
+6. **Still open:** run this against a live Hermes + Anytype setup end-to-end — `adapter.py` can't be unit-tested in this repo at all (it imports Hermes-internal `gateway.*` modules that only exist inside a real Hermes install; see the module's own docstring and README's Development section), so nothing has verified it actually loads and connects yet.

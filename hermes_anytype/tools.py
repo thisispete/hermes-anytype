@@ -94,3 +94,105 @@ async def update_object(
 ) -> dict[str, Any]:
     normalized = await _validate_properties(client, type_key, properties)
     return await client.update_object(object_id, properties=normalized)
+
+
+# ---------------------------------------------------------------------------
+# Hermes tool registration -- schemas + handler(args, **kwargs) wrappers
+#
+# Confirmed against tools/registry.py: registry.dispatch() calls
+# `entry.handler(args, **kwargs)` where `args` is the LLM-supplied argument
+# dict matching the JSON schema below (docs/design.md §12).
+# ---------------------------------------------------------------------------
+
+TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    "anytype_search_objects": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Free-text search query."},
+            "types": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional list of type keys to narrow the search to.",
+            },
+        },
+        "required": ["query"],
+    },
+    "anytype_get_type": {
+        "type": "object",
+        "properties": {
+            "type_key": {"type": "string", "description": "The type's key, e.g. 'task'."},
+        },
+        "required": ["type_key"],
+    },
+    "anytype_create_object": {
+        "type": "object",
+        "properties": {
+            "type_key": {"type": "string", "description": "The object's type key, e.g. 'task'."},
+            "name": {"type": "string", "description": "The object's title."},
+            "properties": {
+                "type": "object",
+                "description": "Property key -> raw value. Validated and normalized "
+                "server-side against the type's real schema before writing.",
+            },
+        },
+        "required": ["type_key", "name"],
+    },
+    "anytype_update_object": {
+        "type": "object",
+        "properties": {
+            "object_id": {"type": "string", "description": "The object to update."},
+            "type_key": {"type": "string", "description": "The object's type key."},
+            "properties": {
+                "type": "object",
+                "description": "Property key -> raw value to set.",
+            },
+        },
+        "required": ["object_id", "type_key", "properties"],
+    },
+}
+
+TOOL_DESCRIPTIONS: dict[str, str] = {
+    "anytype_search_objects": "Search the Anytype space's objects by free-text query, "
+    "optionally narrowed to specific type keys.",
+    "anytype_get_type": "Look up an Anytype type's schema (properties, format, layout) "
+    "for a given type key.",
+    "anytype_create_object": "Create a new object in the Anytype space. Property keys "
+    "are validated against the type's real schema before writing.",
+    "anytype_update_object": "Update an existing Anytype object's properties. Property "
+    "keys are validated against the type's real schema before writing.",
+}
+
+
+def make_tool_handlers(client: AnytypeClient) -> dict[str, Any]:
+    """Build the args-dict handler closures ctx.register_tool() expects,
+    bound to a single shared AnytypeClient."""
+
+    async def _search_objects(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        results = await search_objects(client, args["query"], args.get("types"))
+        return {"results": results}
+
+    async def _get_type(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        return await get_type(client, args["type_key"])
+
+    async def _create_object(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        try:
+            return await create_object(
+                client, args["type_key"], args["name"], args.get("properties")
+            )
+        except PropertyValidationError as exc:
+            return {"error": str(exc)}
+
+    async def _update_object(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        try:
+            return await update_object(
+                client, args["object_id"], args["type_key"], args["properties"]
+            )
+        except PropertyValidationError as exc:
+            return {"error": str(exc)}
+
+    return {
+        "anytype_search_objects": _search_objects,
+        "anytype_get_type": _get_type,
+        "anytype_create_object": _create_object,
+        "anytype_update_object": _update_object,
+    }

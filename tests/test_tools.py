@@ -1,18 +1,25 @@
 import pytest
 
-from hermes_anytype.tools import PropertyValidationError, create_object, update_object
+from hermes_anytype.tools import (
+    PropertyValidationError,
+    create_object,
+    make_tool_handlers,
+    update_object,
+)
 
 
 class FakeClient:
     """Minimal stand-in for AnytypeClient covering just what tools.py touches."""
 
-    def __init__(self, type_info, properties, created=None, updated=None):
+    def __init__(self, type_info, properties, created=None, updated=None, search_results=None):
         self._type_info = type_info
         self._properties = properties
         self._created = created or {"id": "obj1"}
         self._updated = updated or {"id": "obj1"}
+        self._search_results = search_results or []
         self.create_object_calls = []
         self.update_object_calls = []
+        self.search_calls = []
 
     async def get_type(self, type_key):
         return self._type_info
@@ -27,6 +34,10 @@ class FakeClient:
     async def update_object(self, object_id, **kwargs):
         self.update_object_calls.append((object_id, kwargs))
         return self._updated
+
+    async def search(self, query, **kwargs):
+        self.search_calls.append((query, kwargs))
+        return self._search_results
 
 
 TASK_TYPE = {"id": "type1", "key": "task"}
@@ -73,3 +84,51 @@ async def test_update_object_normalizes_and_forwards_object_id():
     object_id, kwargs = client.update_object_calls[0]
     assert object_id == "obj42"
     assert kwargs["properties"] == [{"key": "assigned_to", "objects": ["person1"]}]
+
+
+# -- Handler wrappers (the handler(args, **kwargs) shape Hermes's registry
+# actually calls -- see tools.py's registration section docstring) ---------
+
+
+async def test_search_objects_handler_wraps_results():
+    client = FakeClient(TASK_TYPE, TASK_PROPERTIES, search_results=[{"id": "obj1"}])
+    handlers = make_tool_handlers(client)
+
+    result = await handlers["anytype_search_objects"]({"query": "roadmap"})
+
+    assert result == {"results": [{"id": "obj1"}]}
+    assert client.search_calls == [("roadmap", {"types": None})]
+
+
+async def test_create_object_handler_returns_corrective_error_dict():
+    client = FakeClient(TASK_TYPE, TASK_PROPERTIES)
+    handlers = make_tool_handlers(client)
+
+    result = await handlers["anytype_create_object"](
+        {"type_key": "task", "name": "Ship it", "properties": {"assignee": "bob"}}
+    )
+
+    assert "error" in result
+    assert "'assignee' not found on type 'task'" in result["error"]
+    assert not client.create_object_calls
+
+
+async def test_update_object_handler_returns_corrective_error_dict():
+    client = FakeClient(TASK_TYPE, TASK_PROPERTIES)
+    handlers = make_tool_handlers(client)
+
+    result = await handlers["anytype_update_object"](
+        {"object_id": "obj42", "type_key": "task", "properties": {"assignee": "bob"}}
+    )
+
+    assert "error" in result
+    assert not client.update_object_calls
+
+
+async def test_get_type_handler_returns_type_info():
+    client = FakeClient(TASK_TYPE, TASK_PROPERTIES)
+    handlers = make_tool_handlers(client)
+
+    result = await handlers["anytype_get_type"]({"type_key": "task"})
+
+    assert result == TASK_TYPE

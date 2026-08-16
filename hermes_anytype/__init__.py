@@ -1,19 +1,18 @@
-"""register(ctx) — registers the Anytype platform adapter and its tools.
+"""register(ctx) -- registers the Anytype platform adapter and its tools.
 
-STUB: the exact `ctx.register_platform()` / `ctx.register_tool()` signatures
-below are best-guess, matching the shape design.md describes but NOT verified
-against Hermes's actual plugin-authoring API (design.md §11/§12, next-step
-#2). Confirm the literal signatures before relying on this to actually load
-in a running Hermes instance.
+Confirmed against Hermes's real plugin API (docs/design.md §12): ctx exposes
+register_platform() and register_tool() as documented in hermes_cli/plugins.py
+and demonstrated by the shipped Mattermost/IRC plugins in NousResearch/
+hermes-agent's plugins/platforms/.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from .anytype_client import AnytypeClient
-from .config import load_config
-from .gateway import AnytypeGateway
+from .anytype_client import AnytypeClient, AnytypeConfig
+from .tools import TOOL_DESCRIPTIONS, TOOL_SCHEMAS, make_tool_handlers
 
 __all__ = ["register"]
 
@@ -21,23 +20,35 @@ __version__ = "0.1.0"
 
 
 def register(ctx: Any) -> None:
-    config = load_config(ctx.config)
-    client = AnytypeClient(config.anytype)
+    # Deferred: adapter.py imports gateway.config / gateway.platforms.base,
+    # which only exist inside a real Hermes install (see adapter.py's module
+    # docstring). Importing it lazily here -- rather than at package import
+    # time -- means `import hermes_anytype` (and its submodules) still works
+    # standalone, e.g. for this repo's own test suite.
+    from .adapter import register as _register_platform
 
-    # TODO(confirm-hermes-api): confirm register_platform's expected
-    # interface (does it want a class instance, a start/stop pair of
-    # coroutines, an object implementing some Protocol?) against Hermes's
-    # plugin-development docs, then wire AnytypeGateway in for real.
-    async def _on_message(channel, message: dict) -> None:
-        raise NotImplementedError(
-            "wire this into Hermes's turn pipeline once ctx's message-handoff "
-            "API is confirmed (design.md §4.1, §12)"
+    _register_platform(ctx)
+
+    # Tools share one AnytypeClient with the platform adapter would be nicer,
+    # but the adapter isn't constructed until register_platform's
+    # adapter_factory runs later (possibly never, if the platform isn't
+    # enabled) -- so tools get their own client, built straight from env vars
+    # the same way the adapter does. Both are just aiohttp sessions opened
+    # lazily on first request; there's no shared state to duplicate.
+    client = AnytypeClient(
+        AnytypeConfig(
+            api_key=os.getenv("ANYTYPE_API_KEY", ""),
+            base_url=os.getenv("ANYTYPE_API_BASE_URL", ""),
+            space_id=os.getenv("ANYTYPE_SPACE_ID", ""),
         )
-
-    gateway = AnytypeGateway(client, config.channels, _on_message)
-    ctx.register_platform("anytype", gateway)
-
-    from . import tools as tools_module
-
-    for tool_name in ("search_objects", "get_type", "create_object", "update_object"):
-        ctx.register_tool(tool_name, getattr(tools_module, tool_name), client=client)
+    )
+    handlers = make_tool_handlers(client)
+    for name, schema in TOOL_SCHEMAS.items():
+        ctx.register_tool(
+            name=name,
+            toolset="anytype",
+            schema=schema,
+            handler=handlers[name],
+            is_async=True,
+            description=TOOL_DESCRIPTIONS.get(name, ""),
+        )
