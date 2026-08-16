@@ -40,21 +40,28 @@ is still needed before calling this production-ready; see
 
 ## Install
 
-Drop this repo's `hermes_anytype/` directory into `~/.hermes/plugins/` (which
-is the same directory the official Docker image mounts from `~/.hermes` on
-the host, so no compose changes are needed). No `pip install` step required
-inside Hermes's own environment: this plugin is deliberately built on
-`aiohttp`, which already ships with Hermes core — see
-[`anytype_client.py`](hermes_anytype/anytype_client.py)'s module docstring
-for why that matters (Hermes's official image treats its install tree as
-immutable at runtime, so a plugin with its own extra pip dependency would
-force a custom derived image just to use it).
+Drop this repo's `hermes_anytype/` directory into `<hermes-data>/plugins/`,
+where `<hermes-data>` is whatever *host* path your own Hermes Docker Compose
+file maps to the container's `/opt/data` — check the `volumes:` line for
+the `hermes` service in your own `docker-compose.yml`. **Don't assume
+`~/.hermes`:** that's just the example path in Hermes's own docs (and the
+one this README originally assumed) — real deployments map it to whatever
+the operator chose, and it commonly differs. No compose changes are needed
+either way, since `/opt/data` already covers `plugins/` alongside
+`skills/`/`sessions/`/etc.
+
+No `pip install` step required inside Hermes's own environment: this plugin
+is deliberately built on `aiohttp`, which already ships with Hermes core —
+see [`anytype_client.py`](hermes_anytype/anytype_client.py)'s module
+docstring for why that matters (Hermes's official image treats its install
+tree as immutable at runtime, so a plugin with its own extra pip dependency
+would force a custom derived image just to use it).
 
 ## Configure
 
-Copy [`.env.example`](.env.example) to `.env` (in `~/.hermes/`, alongside
-Hermes's own config) and fill in the values from the bot-account setup
-above:
+Copy [`.env.example`](.env.example) to `.env` inside that same
+`<hermes-data>` directory, alongside Hermes's own config, and fill in the
+values from the bot-account setup above:
 
 ```bash
 ANYTYPE_API_KEY=...              # Hermes's own identity's API key, not yours
