@@ -8,6 +8,17 @@ description: >
   and gives the agent live chat presence plus schema-driven tools to
   search/create/update the space's typed objects.
 author: pete.schirmer@gmail.com
+# Confirmed real and functionally required, not just a `hermes doctor` lint
+# nit -- see plugins/platforms/a2a/plugin.yaml in NousResearch/hermes-agent:
+# declaring tools here is what makes discovery import tools.py in contexts
+# where this plugin is otherwise deferred (CLI/TUI, not just the gateway
+# process) -- without it, the tools may never register at all in those
+# contexts, not merely warn.
+provides_tools:
+  - anytype_search_objects
+  - anytype_get_type
+  - anytype_create_object
+  - anytype_update_object
 requires_env:
   - name: ANYTYPE_API_KEY
     description: "API key for Hermes's own Anytype identity -- see docs/design.md Section 10 for setup"

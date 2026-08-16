@@ -43,7 +43,7 @@ hermes_anytype/
 
 ### Config shape
 
-Confirmed real: Hermes's platform plugins are configured via env vars (`plugin.yaml`'s `requires_env`/`optional_env`), not a nested custom YAML block — the original guess below was wrong in shape, right in spirit:
+Confirmed real: Hermes's platform plugins are configured via env vars (`plugin.yaml`'s `requires_env`/`optional_env`), not a nested custom YAML block — the original guess below was wrong in shape, right in spirit. **Caught by real-world install feedback:** `plugin.yaml` also needs a `provides_tools` list naming every tool the package registers (see `plugins/platforms/a2a/plugin.yaml` for the confirmed real pattern) — without it, `hermes doctor` warns, and in some deferred-loading contexts (CLI/TUI, not just the gateway process) the tools may never register at all. Missing this wasn't caught by anything short of an actual install attempt.
 
 ```bash
 ANYTYPE_API_KEY=...
