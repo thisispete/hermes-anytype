@@ -32,6 +32,17 @@ is still needed before calling this production-ready; see
 
    ```bash
    docker compose -f docker-compose.anytype-bot.yml up -d
+
+   # Back up the account recovery key now, then delete it from the
+   # container -- it's the ONLY way to recover this identity if the
+   # anytype-cli-data volume is ever lost. Treat it like a wallet seed
+   # phrase: it's written to a file on the volume, deliberately never
+   # printed to docker logs (see docker-compose.anytype-bot.yml's
+   # comments for why that matters).
+   docker compose -f docker-compose.anytype-bot.yml exec anytype-cli cat /root/.anytype/ACCOUNT_RECOVERY_KEY.txt
+   # copy that into a password manager, then:
+   docker compose -f docker-compose.anytype-bot.yml exec anytype-cli rm /root/.anytype/ACCOUNT_RECOVERY_KEY.txt
+
    docker compose -f docker-compose.anytype-bot.yml exec anytype-cli anytype auth apikey create hermes-integration
    # from your desktop app: Share Space -> copy invite link
    docker compose -f docker-compose.anytype-bot.yml exec anytype-cli anytype space join "<invite-link>"
