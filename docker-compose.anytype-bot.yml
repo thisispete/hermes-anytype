@@ -1,0 +1,68 @@
+# Runs Hermes's own Anytype identity as a headless anytype-cli node.
+#
+# Confirmed against anyproto/any-sync-dockercompose's own (optional,
+# commented-out) anytype-cli service block -- same official image, same
+# bootstrap-then-serve pattern. See docs/design.md Section 10.
+#
+# This file is for the DEFAULT ANYTYPE NETWORK case (no self-hosted sync
+# backend). If you're self-hosting your own any-sync backend instead, don't
+# use this file -- uncomment the anytype-cli block already present in your
+# any-sync-dockercompose checkout's docker-compose.yml so the bot shares
+# your network.yml and actually lands on your network.
+#
+# Usage:
+#   docker compose -f docker-compose.anytype-bot.yml up -d
+#   docker compose -f docker-compose.anytype-bot.yml exec anytype-cli /app/anytype auth apikey create hermes-integration
+#   # from your desktop app: Share Space -> copy invite link
+#   docker compose -f docker-compose.anytype-bot.yml exec anytype-cli /app/anytype space join "<invite-link>"
+#   # then approve the join request in-app -- see docs/design.md Section 10
+
+services:
+  anytype-cli-bootstrap:
+    image: "ghcr.io/anyproto/anytype-cli:${ANYTYPE_CLI_VERSION:-latest}"
+    restart: "no"
+    volumes:
+      - anytype-cli-data:/root/.anytype
+    environment:
+      - ANYTYPE_CLI_ACCOUNT_NAME=${ANYTYPE_CLI_ACCOUNT_NAME:-hermes}
+    entrypoint: >
+      /bin/sh -c "
+      if [ ! -f /root/.anytype/config.json ]; then
+        echo 'Creating bot account...';
+        /app/anytype serve &
+        SERVER_PID=$$!;
+        sleep 2;
+        /app/anytype auth create $${ANYTYPE_CLI_ACCOUNT_NAME};
+        sleep 2;
+        kill $$SERVER_PID 2>/dev/null || true;
+        wait $$SERVER_PID 2>/dev/null || true;
+      else
+        echo 'Bot account already exists, skipping bootstrap';
+      fi;
+      exit 0;
+      "
+
+  anytype-cli:
+    image: "ghcr.io/anyproto/anytype-cli:${ANYTYPE_CLI_VERSION:-latest}"
+    restart: unless-stopped
+    depends_on:
+      anytype-cli-bootstrap:
+        condition: service_completed_successfully
+    ports:
+      # Only the REST API needs publishing -- this plugin never speaks
+      # anytype-cli's gRPC ports (31010/31011).
+      - "127.0.0.1:${ANYTYPE_CLI_API_PORT:-31012}:31012"
+    volumes:
+      - anytype-cli-data:/root/.anytype
+    healthcheck:
+      test: nc -z 127.0.0.1 31010 || exit 1
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  # Holds the "hermes" account's keys -- this is the identity data
+  # docs/design.md Section 10 warns needs backing up. Losing this volume
+  # without a backup loses the account.
+  anytype-cli-data:

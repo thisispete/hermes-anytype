@@ -8,7 +8,7 @@ a dependency of ours). The logic actually worth unit-testing -- mention
 filtering, env-var parsing, required-config checks -- lives here instead,
 with no such import, so it stays covered even though the adapter class
 itself can only be exercised inside a live Hermes environment (same
-can't-run-the-real-thing-in-CI situation docs/design.md §7 already accepts
+can't-run-the-real-thing-in-CI situation docs/design.md Section 7 already accepts
 for Anytype itself).
 """
 
@@ -36,11 +36,11 @@ def env_bool(*values: Any, default: bool) -> bool:
 
 
 def should_respond(message_text: str, *, require_mention: bool, trigger: str) -> bool:
-    """Per-chat mention/reply-all filter (docs/design.md §2, §4.1).
+    """Per-chat mention/reply-all filter (docs/design.md Section 2, Section 4.1).
 
     Structural mention detection (via TextMark spans) isn't wired in -- the
     mark shape needs empirical verification against a running instance
-    (docs/design.md §9/§12). Falls back to a case-insensitive substring
+    (docs/design.md Section 9/Section 12). Falls back to a case-insensitive substring
     match on the trigger string.
     """
     if not require_mention:
@@ -49,6 +49,6 @@ def should_respond(message_text: str, *, require_mention: bool, trigger: str) ->
 
 
 def has_required_config(api_key: str, base_url: str, space_id: str) -> bool:
-    """docs/design.md §6: fail loud at startup on bad/missing config, never
+    """docs/design.md Section 6: fail loud at startup on bad/missing config, never
     silently no-op."""
     return bool(api_key.strip() and base_url.strip() and space_id.strip())

@@ -1,7 +1,7 @@
 """LLM-visible tools: search_objects, create_object, update_object, get_type.
 
 Property validation for writes happens here, invisible to the LLM's context
-(design.md §4.2) — an HTTP round-trip inside the handler, not a tool call, so
+(design.md Section 4.2) — an HTTP round-trip inside the handler, not a tool call, so
 a bad property key costs latency, not a confusing raw API error surfaced to
 the model.
 """
@@ -17,7 +17,7 @@ class PropertyValidationError(ValueError):
     """Raised when the LLM-supplied properties don't match the type's schema.
 
     Handlers should catch this and return the message as a corrective
-    tool-result error rather than letting it kill the turn (design.md §6).
+    tool-result error rather than letting it kill the turn (design.md Section 6).
     """
 
 
@@ -25,7 +25,7 @@ async def _validate_properties(
     client: AnytypeClient, type_key: str, properties: dict[str, Any]
 ) -> list[dict[str, Any]]:
     """Look up the type's real property keys and normalize the LLM's input
-    into the typed link-value shape the API expects (design.md §9).
+    into the typed link-value shape the API expects (design.md Section 9).
 
     Raises PropertyValidationError with a corrective message on the first
     unknown key, naming what's available so the LLM can retry itself.
@@ -101,7 +101,7 @@ async def update_object(
 #
 # Confirmed against tools/registry.py: registry.dispatch() calls
 # `entry.handler(args, **kwargs)` where `args` is the LLM-supplied argument
-# dict matching the JSON schema below (docs/design.md §12).
+# dict matching the JSON schema below (docs/design.md Section 12).
 # ---------------------------------------------------------------------------
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {

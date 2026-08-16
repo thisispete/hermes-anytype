@@ -1,6 +1,6 @@
 """register(ctx) -- registers the Anytype platform adapter and its tools.
 
-Confirmed against Hermes's real plugin API (docs/design.md §12): ctx exposes
+Confirmed against Hermes's real plugin API (docs/design.md Section 12): ctx exposes
 register_platform() and register_tool() as documented in hermes_cli/plugins.py
 and demonstrated by the shipped Mattermost/IRC plugins in NousResearch/
 hermes-agent's plugins/platforms/.

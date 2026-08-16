@@ -10,7 +10,7 @@ description: >
 author: pete.schirmer@gmail.com
 requires_env:
   - name: ANYTYPE_API_KEY
-    description: "API key for Hermes's own Anytype identity -- see docs/design.md §10 for setup"
+    description: "API key for Hermes's own Anytype identity -- see docs/design.md Section 10 for setup"
     prompt: "Anytype API key"
     password: true
   - name: ANYTYPE_API_BASE_URL

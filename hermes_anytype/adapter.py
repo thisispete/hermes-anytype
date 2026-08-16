@@ -2,7 +2,7 @@
 
 Confirmed against Hermes's own `gateway/platforms/base.py` and the shipped
 Mattermost/IRC plugins in NousResearch/hermes-agent's `plugins/platforms/`
-(see docs/design.md §12 for how that was verified). This supersedes the
+(see docs/design.md Section 12 for how that was verified). This supersedes the
 earlier stubbed `gateway.py` -- the register(ctx)/BasePlatformAdapter shapes
 here are the real, confirmed API, not a best guess.
 
@@ -148,7 +148,7 @@ class AnytypeAdapter(BasePlatformAdapter):
         return SendResult(success=True, message_id=message_id, raw_response=result)
 
     async def send_typing(self, chat_id: str) -> None:
-        pass  # Anytype's chat API has no typing-indicator endpoint (docs/design.md §9)
+        pass  # Anytype's chat API has no typing-indicator endpoint (docs/design.md Section 9)
 
     async def get_chat_info(self, chat_id: str) -> dict[str, Any]:
         chats = await self.client.list_chats()

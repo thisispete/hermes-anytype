@@ -23,15 +23,19 @@ is still needed before calling this production-ready; see
    local API works the same regardless of network mode).
 3. **A separate Anytype identity for Hermes itself**, invited into your
    space as its own member — otherwise every message posts under your own
-   profile, not "Hermes". See [design.md §10](docs/design.md#10-hermess-anytype-identity-bot-account-setup)
-   for the full `anytype-cli` walkthrough. Short version:
+   profile, not "Hermes". See [design.md Section 10](docs/design.md#10-hermess-anytype-identity-bot-account-setup)
+   for the full walkthrough. Short version, using the official
+   `ghcr.io/anyproto/anytype-cli` image via
+   [`docker-compose.anytype-bot.yml`](docker-compose.anytype-bot.yml)
+   (default Anytype Network case — see that file's header comment for the
+   self-hosted-backend variant):
 
    ```bash
-   anytype serve                              # run Hermes's own headless node
-   anytype auth create hermes                 # create the "hermes" identity
-   anytype auth apikey create hermes-integration
+   docker compose -f docker-compose.anytype-bot.yml up -d
+   docker compose -f docker-compose.anytype-bot.yml exec anytype-cli /app/anytype auth apikey create hermes-integration
    # from your desktop app: Share Space -> copy invite link
-   anytype space join "<invite-link>"         # then approve the join request in-app
+   docker compose -f docker-compose.anytype-bot.yml exec anytype-cli /app/anytype space join "<invite-link>"
+   # then approve the join request in-app
    ```
 
 ## Install

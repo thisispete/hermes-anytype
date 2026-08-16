@@ -1,16 +1,16 @@
 """Thin async REST + SSE wrapper over the Anytype local HTTP API.
 
 Built on aiohttp rather than httpx deliberately: aiohttp already ships inside
-Hermes's own runtime (see docs/design.md §12), so a plugin built on it needs
+Hermes's own runtime (see docs/design.md Section 12), so a plugin built on it needs
 no extra pip install — important because Hermes's official Docker image
 treats its install tree as immutable at runtime (no lazy installs), so any
 plugin dependency not already bundled would force every Docker user to build
 a derived image just to use this plugin.
 
-Covers the subset of the API this plugin needs (see docs/design.md §9):
+Covers the subset of the API this plugin needs (see docs/design.md Section 9):
 search, type/property introspection, object writes, and chat. Deliberately
 dumb — no caching, no retry-with-backoff here (that's layered on top by
-callers per the error-handling table in docs/design.md §6).
+callers per the error-handling table in docs/design.md Section 6).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class AnytypeConfig:
 
 
 class AnytypeClient:
-    """One instance per configured space (see docs/design.md §2: single space per config).
+    """One instance per configured space (see docs/design.md Section 2: single space per config).
 
     The aiohttp session is created lazily on first use rather than in
     __init__, since __init__ may run outside a running event loop (e.g. at
@@ -246,7 +246,7 @@ class AnytypeClient:
         The format is simple enough not to need a library: ``event:``/``data:``
         lines, blank-line-terminated, ``:``-prefixed comment lines as
         heartbeats. Reconnect/backoff is the adapter's responsibility
-        (docs/design.md §6) — this just yields events for as long as the
+        (docs/design.md Section 6) — this just yields events for as long as the
         connection stays open.
         """
         path = f"/v1/spaces/{self._config.space_id}/chats/{chat_id}/messages/stream"

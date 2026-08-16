@@ -1,16 +1,16 @@
 # hermes-anytype — Design & Roadmap
 
-**Status:** Implemented against Hermes's confirmed real plugin API (verified against `NousResearch/hermes-agent`'s own shipped Mattermost/IRC plugins — see §12). Not yet run against a live Anytype instance.
+**Status:** Implemented against Hermes's confirmed real plugin API (verified against `NousResearch/hermes-agent`'s own shipped Mattermost/IRC plugins — see Section 12). Not yet run against a live Anytype instance.
 **License:** MIT
 **Repo name:** `hermes-anytype`
 
 ## 1. What this is
 
-A Hermes plugin that gives Hermes (a) a live chat presence inside a self-hosted Anytype space, and (b) tools to search/create/update that space's typed objects — both driven by live schema introspection against the Anytype API, so it works against anyone's custom type setup (Person/Company/Task, or anything else) with zero manual mapping. Meant to be a genuine open-source community project, not a personal script: real README, clear config, sane defaults, MIT license — but not something with an ongoing maintenance commitment behind it; built for funzies and as a portfolio piece, published so others can fork and run with it if they want to. That stance shapes a few calls below: reasonable scope cutoffs over gold-plating (§6, §12), no attempt to track or cross-reference adjacent community projects (§4.2).
+A Hermes plugin that gives Hermes (a) a live chat presence inside a self-hosted Anytype space, and (b) tools to search/create/update that space's typed objects — both driven by live schema introspection against the Anytype API, so it works against anyone's custom type setup (Person/Company/Task, or anything else) with zero manual mapping. Meant to be a genuine open-source community project, not a personal script: real README, clear config, sane defaults, MIT license — but not something with an ongoing maintenance commitment behind it; built for funzies and as a portfolio piece, published so others can fork and run with it if they want to. That stance shapes a few calls below: reasonable scope cutoffs over gold-plating (Section 6, Section 12), no attempt to track or cross-reference adjacent community projects (Section 4.2).
 
 ### Origin / motivation
 
-Built out of a real use case: tracking a multi-stage pipeline of custom object types (e.g. Company → Role → Interview) in place of a hand-maintained markdown dashboard, and wanting an agent that can both talk about that data in Anytype's native chat and keep it organized on your behalf — the same pattern Hermes already applies to other personal knowledge-base platforms via its plugin ecosystem, just extended to Anytype's typed-object model. The live-introspection design (§2) means this works against *any* type schema, not just the one that motivated it — Person/Company/Task, or anything else a user has set up.
+Built out of a real use case: tracking a multi-stage pipeline of custom object types (e.g. Company → Role → Interview) in place of a hand-maintained markdown dashboard, and wanting an agent that can both talk about that data in Anytype's native chat and keep it organized on your behalf — the same pattern Hermes already applies to other personal knowledge-base platforms via its plugin ecosystem, just extended to Anytype's typed-object model. The live-introspection design (Section 2) means this works against *any* type schema, not just the one that motivated it — Person/Company/Task, or anything else a user has set up.
 
 ## 2. Scope decisions (settled)
 
@@ -18,7 +18,7 @@ These were deliberately chosen over alternatives during design — don't re-liti
 
 - **Chat gateway + object/schema tools, bundled in one plugin package.** Not split across two projects, and not dependent on the separate official `anyproto/anytype-mcp` server — this plugin is self-contained.
 - **Real OSS polish from day one** — license, README, config validation with clear errors, basic tests. Built so a stranger can self-host it without asking questions.
-- **Live introspection, no persisted schema cache.** No config file mapping types → properties that could go stale after a user edits their schema. (See §5 for how this is kept cheap despite being "live every time.")
+- **Live introspection, no persisted schema cache.** No config file mapping types → properties that could go stale after a user edits their schema. (See Section 5 for how this is kept cheap despite being "live every time.")
 - **Ships as a genuine Hermes platform-adapter plugin** (`ctx.register_platform()`), not a standalone bridge service. Requires a running Hermes instance; in exchange it gets Hermes's existing tool loop, memory, and retry handling for free. Confirmed Hermes plugins can register a platform adapter *and* tools from the same package in one `register(ctx)` call.
 - **Single Anytype space per config.** Multiple spaces = multiple config blocks, not a list-of-spaces schema. Keeps the config and mental model simple.
 - **Per-chat response mode, not global.** Each `chat_id` in the space gets its own setting: `mention` (only responds when addressed, e.g. `@hermes`) or `all` (responds to everything). Default is `mention`. This maps directly onto real usage patterns: a solo second-brain space sets its one chat to `all`; a team space sets a shared room to `mention` and a dedicated help room to `all`. Confirmed Anytype has no separate DM primitive — a space just has one or more `chat_id`s (`list-chats`/`create-chat`), so this per-chat config is the only lever needed.
@@ -27,7 +27,7 @@ These were deliberately chosen over alternatives during design — don't re-liti
 
 ## 3. Architecture
 
-One Python package, following Hermes's own real plugin conventions (confirmed against `plugins/platforms/mattermost/` and `plugins/platforms/irc/` in `NousResearch/hermes-agent` — see §12):
+One Python package, following Hermes's own real plugin conventions (confirmed against `plugins/platforms/mattermost/` and `plugins/platforms/irc/` in `NousResearch/hermes-agent` — see Section 12):
 
 ```
 hermes_anytype/
@@ -97,9 +97,9 @@ Anytype SSE event (message_added)
 
 | Failure | Behavior |
 |---|---|
-| SSE disconnect (network blip, Anytype restart) | Exponential-backoff reconnect. **Simpler than originally planned:** reconnects to a fresh live stream rather than resuming from an `after_order_id` cursor -- messages sent during the disconnect window can be missed, but a full history replay is avoided either way. Cursor-based gapless resume is a real enhancement, not implemented (§12) -- didn't seem worth the added complexity for this project's scope (§1's "for funzies" framing). |
+| SSE disconnect (network blip, Anytype restart) | Exponential-backoff reconnect. **Simpler than originally planned:** reconnects to a fresh live stream rather than resuming from an `after_order_id` cursor -- messages sent during the disconnect window can be missed, but a full history replay is avoided either way. Cursor-based gapless resume is a real enhancement, not implemented (Section 12) -- didn't seem worth the added complexity for this project's scope (Section 1's "for funzies" framing). |
 | Bad/revoked API key | Fail loud at plugin startup with a clear config error — never silently no-op |
-| Property validation mismatch on write | Corrective tool-result error back to the LLM (see §4.2), not an exception |
+| Property validation mismatch on write | Corrective tool-result error back to the LLM (see Section 4.2), not an exception |
 | Anytype 5xx / rate limit | Bounded retry-with-backoff in `anytype_client.py`, not infinite |
 
 ## 7. Testing
@@ -113,7 +113,7 @@ Anytype SSE event (message_added)
 
 - MIT license.
 - Confirmed real (not a guess): Hermes's official Docker image (`nousresearch/hermes-agent:latest`) mounts a single host `~/.hermes` → container `/opt/data`, which already covers `plugins/` alongside `skills/`/`sessions/`/etc — so dropping this plugin into `~/.hermes/plugins/` needs zero compose changes. The image treats its install tree as immutable at runtime ("no lazy installs"), which is *why* `anytype_client.py` is built on `aiohttp` (already bundled with Hermes core) instead of `httpx`/`httpx-sse`: a plugin with its own extra pip dependency would force every Docker user to build and maintain a derived image just to use it. Directory-drop plugins (this one) also need no pip-install step at all, even outside Docker, since Hermes imports the plugin directory directly rather than via a package manager.
-- README covers: prerequisites (running Hermes + Anytype with local API access — self-hosting the sync backend specifically is optional, orthogonal, and not required), install (drop-in, no pip step), the real env-var config from §3, and mention-mode vs. reply-all framing from §2.
+- README covers: prerequisites (running Hermes + Anytype with local API access — self-hosting the sync backend specifically is optional, orthogonal, and not required), install (drop-in, no pip step), the real env-var config from Section 3, and mention-mode vs. reply-all framing from Section 2.
 
 ## 9. Technical reference (verified against the live Anytype API spec, 2025-11-08 version)
 
@@ -142,19 +142,18 @@ Captured here so implementation doesn't have to re-derive this from scratch.
 
 ## 10. Hermes's Anytype identity (bot account setup)
 
-Open question from §9 that turned out to matter architecturally: **Anytype has no bot-token concept.** Unlike Slack/Discord, there's no way to mint a credential scoped *inside* an existing account. Every space participant is a full any-sync identity (own keypair, own local node). The REST API key from the challenge flow (`POST /v1/auth/challenges` → `POST /v1/auth/api_keys`) just authenticates to whichever account is running the local node at the base URL you point at — it does not create an identity. **If `api_key` is minted against the user's own desktop Anytype app, every Hermes message posts under the human's own member profile, not "Hermes."**
+Open question from Section 9 that turned out to matter architecturally: **Anytype has no bot-token concept.** Unlike Slack/Discord, there's no way to mint a credential scoped *inside* an existing account. Every space participant is a full any-sync identity (own keypair, own local node). The REST API key from the challenge flow (`POST /v1/auth/challenges` → `POST /v1/auth/api_keys`) just authenticates to whichever account is running the local node at the base URL you point at — it does not create an identity. **If `api_key` is minted against the user's own desktop Anytype app, every Hermes message posts under the human's own member profile, not "Hermes."**
 
-To give Hermes a distinct profile, it needs its own account, running its own node, invited into the space as its own member. `anyproto/anytype-cli` is built for exactly this ("bot accounts") — it embeds `anytype-heart` headless, no desktop app required:
+To give Hermes a distinct profile, it needs its own account, running its own node, invited into the space as its own member. `anyproto/anytype-cli` is built for exactly this ("bot accounts") — it embeds `anytype-heart` headless, no desktop app required. Shipped as [`docker-compose.anytype-bot.yml`](../docker-compose.anytype-bot.yml) at the repo root, using the official `ghcr.io/anyproto/anytype-cli` image — the bootstrap-then-serve pattern in that file is confirmed against `anyproto/any-sync-dockercompose`'s own (optional, commented-out) `anytype-cli` service block, not invented:
 
-1. Run the CLI as its own headless node: `anytype serve` (or `anytype service install && anytype service start` to persist it).
-2. `anytype auth create hermes` — mints a new account key (account-key auth only, no mnemonic login). This is the identity that becomes "Hermes." If self-hosted (not the default anytype.io network), pass `--network-config` pointing at the *same* any-sync deployment the human's primary space lives on, or the bot account lands on an unreachable network.
-3. `anytype auth apikey create hermes-integration` — mints the API key scoped to *this* identity/node. This is `ANYTYPE_API_KEY`; `api_base_url` is this node's own local port (CLI default `31012`), not the human's desktop app's `31009`.
-4. From the human's desktop app: Share Space → generate an invite link (approval-required by default; owner can enable auto-approve but Anytype's own docs advise against it for sensitive spaces).
-5. `anytype space join "<invite-link>"` run against the bot identity, then the human approves the join request in-app. Will likely need explicit promotion to Editor role to match the "free writes by default" decision in §2 — default post-join role isn't confirmed.
+1. `docker compose -f docker-compose.anytype-bot.yml up -d` — the bootstrap service runs the CLI headless just long enough to `auth create hermes` (mints a new account key; account-key auth only, no mnemonic login) if `/root/.anytype/config.json` doesn't already exist, then the main service takes over with `restart: unless-stopped`. That file is for the default Anytype Network case; if self-hosting your own any-sync backend instead, don't use it — uncomment the equivalent block already in your `any-sync-dockercompose` checkout so the bot shares your `network.yml` and actually lands on your network (an unrelated bot account with no `--network-config` pointed at the same deployment lands on an unreachable network).
+2. `docker compose ... exec anytype-cli /app/anytype auth apikey create hermes-integration` — mints the API key scoped to *this* identity/node. This is `ANYTYPE_API_KEY`; `ANYTYPE_API_BASE_URL` is this container's published port (`http://127.0.0.1:31012` by default).
+3. From the human's desktop app: Share Space → generate an invite link (approval-required by default; owner can enable auto-approve but Anytype's own docs advise against it for sensitive spaces).
+4. `docker compose ... exec anytype-cli /app/anytype space join "<invite-link>"`, then the human approves the join request in-app. Will likely need explicit promotion to Editor role to match the "free writes by default" decision in Section 2 — default post-join role isn't confirmed.
 
-**Unverified, needs empirical check before finalizing setup docs:** whether `auth create hermes` makes "Hermes" the actual display name/avatar shown in chat, or whether that has to be set separately once logged in as that identity. Same category of "verify against a running instance" caveat as the mention-mark shape in §9.
+**Unverified, needs empirical check before finalizing setup docs:** whether `auth create hermes` makes "Hermes" the actual display name/avatar shown in chat, or whether that has to be set separately once logged in as that identity. Same category of "verify against a running instance" caveat as the mention-mark shape in Section 9.
 
-This doesn't change the config shape in §3 — still one `api_key`/`api_base_url` pair — but adds a real manual prerequisite outside the plugin itself: standing up a second, bot-owned Anytype node before Hermes can appear as itself rather than as the human. Belongs in the README's prerequisites section (§8).
+This doesn't change the config shape in Section 3 — still one `api_key`/`api_base_url` pair — but adds a real manual prerequisite outside the plugin itself: standing up a second, bot-owned Anytype node before Hermes can appear as itself rather than as the human. Belongs in the README's prerequisites section (Section 8).
 
 ## 11. Alternatives considered (context, not decisions)
 
@@ -167,7 +166,7 @@ Captured for whoever picks this up later, since they were seriously discussed:
 
 1. ~~Bootstrap the actual repo~~ — done: `git init`, MIT `LICENSE`, this file at `docs/design.md`, `.gitignore`.
 2. ~~Confirm Hermes's exact plugin-authoring API surface~~ — done, against real source rather than docs (Hermes's own docs page for this was incomplete): cloned `NousResearch/hermes-agent` and read `hermes_cli/plugins.py` (`register_platform`/`register_tool` signatures), `gateway/platforms/base.py` (`BasePlatformAdapter`, `MessageEvent`, `SendResult`, the `Platform` enum's `_missing_()` dynamic-member hook), and the shipped `plugins/platforms/mattermost/` + `plugins/platforms/irc/` adapters as real templates. `adapter.py`/`tools.py`/`__init__.py`/`plugin.yaml` are now built against that, not a guess.
-3. **Still open:** spin up a self-hosted Anytype instance to verify the mention-mark shape empirically (§4.1, §9) — the shipped adapter uses the substring-match fallback since this was never verified; upgrading to structural mention detection needs a live instance.
-4. **Still open:** stand up the actual Hermes bot identity via `anytype-cli` per §10, and verify empirically whether the account name flows through as the space's display name, or needs setting separately.
-5. **Still open, deliberately deprioritized (§1):** cursor-based SSE resume (`after_order_id`) instead of reconnecting to a fresh live stream on drop (§6). A real gap, not a blocker.
+3. **Still open:** spin up a self-hosted Anytype instance to verify the mention-mark shape empirically (Section 4.1, Section 9) — the shipped adapter uses the substring-match fallback since this was never verified; upgrading to structural mention detection needs a live instance.
+4. **Still open:** actually run `docker-compose.anytype-bot.yml` (Section 10) against a real instance, and verify empirically whether the account name flows through as the space's display name, or needs setting separately.
+5. **Still open, deliberately deprioritized (Section 1):** cursor-based SSE resume (`after_order_id`) instead of reconnecting to a fresh live stream on drop (Section 6). A real gap, not a blocker.
 6. **Still open:** run this against a live Hermes + Anytype setup end-to-end — `adapter.py` can't be unit-tested in this repo at all (it imports Hermes-internal `gateway.*` modules that only exist inside a real Hermes install; see the module's own docstring and README's Development section), so nothing has verified it actually loads and connects yet.
