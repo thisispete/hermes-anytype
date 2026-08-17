@@ -21,7 +21,17 @@ is still needed before calling this production-ready; see
 2. A self-hosted or cloud Anytype instance with the local API enabled
    (self-hosting the sync backend is optional and orthogonal to this — the
    local API works the same regardless of network mode).
-3. **A separate Anytype identity for Hermes itself**, invited into your
+3. **On macOS with Docker Desktop: enable "Use kernel networking for UDP"**
+   (Settings → Resources → Network). Off by default, and without it the bot
+   identity's login will fail intermittently with a QUIC/UDP timeout — this
+   was root-caused across an extensive beta investigation (see
+   [design.md Section 10](docs/design.md#10-hermess-anytype-identity-bot-account-setup)),
+   and even with it enabled the failure isn't fully eliminated, just made
+   survivable (see the retry logic in
+   [`docker-compose.anytype-bot.yml`](docker-compose.anytype-bot.yml)).
+   This is a VM-wide setting — toggling it restarts every container on the
+   host, not just this one.
+4. **A separate Anytype identity for Hermes itself**, invited into your
    space as its own member — otherwise every message posts under your own
    profile, not "Hermes". See [design.md Section 10](docs/design.md#10-hermess-anytype-identity-bot-account-setup)
    for the full walkthrough. Short version, using the official

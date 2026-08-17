@@ -2,21 +2,25 @@
 #
 # Confirmed against anyproto/any-sync-dockercompose's own (optional,
 # commented-out) anytype-cli service block -- same bootstrap-then-serve
-# pattern, but NOT the official image. Uses a patched fork instead
-# (ghcr.io/thisispete/anytype-cli) -- see docs/design.md Section 10 for the
-# full investigation: the official anytype-cli always prefers QUIC over TCP
-# for the account auto-login step, with no way to opt out, and that
-# reproducibly times out under Docker Desktop for Mac. The patch (one line,
-# fork of anyproto/anytype-cli at github.com/thisispete/anytype-cli) sets
-# an existing-but-unexposed PreferYamuxTransport flag on just that one RPC
-# call. Not filed upstream yet -- deferred until confirmed working
-# end-to-end here first.
+# pattern, and (as of beta round 8) the plain official image again. A forked,
+# patched image (github.com/thisispete/anytype-cli) was tried first -- see
+# docs/design.md Section 10 for the full investigation -- but a controlled
+# 5-trial-per-image comparison showed the patch had zero measurable effect
+# (3/5 success either way). The image was never the fix; kept here for
+# history, not maintained going forward.
 #
-# Before using: confirm ghcr.io/thisispete/anytype-cli is set to public
-# visibility (Settings on the package page) -- packages pushed via a
-# GITHUB_TOKEN don't reliably inherit the source repo's public visibility,
-# and this wasn't independently verified (the token used to build it didn't
-# have the scope to check).
+# ############################################################################
+# # REQUIRED macOS Docker Desktop setting, or this will fail unpredictably: #
+# ############################################################################
+# Settings -> Resources -> Network -> "Use kernel networking for UDP". Off by
+# default. Without it, auto-login against a *previously created* stored
+# identity (not fresh account creation, which is unaffected) fails
+# intermittently with a QUIC/UDP DeadlineExceeded error -- 0% success across
+# every test run in this project's beta testing without it, ~60% per-attempt
+# WITH it (still not 100% -- see the retry logic on the anytype-cli service
+# below, added specifically because this setting alone isn't fully
+# deterministic). This is a VM-wide setting; toggling it restarts every
+# container on the host, not just this one.
 #
 # This file is for the DEFAULT ANYTYPE NETWORK case (no self-hosted sync
 # backend). If you're self-hosting your own any-sync backend instead, don't
@@ -42,10 +46,7 @@
 
 services:
   anytype-cli-bootstrap:
-    # Patched fork, not the official image -- see this file's header comment
-    # and docs/design.md Section 10. Override ANYTYPE_CLI_VERSION in your
-    # .env to pin a specific tag once you've confirmed one works.
-    image: "ghcr.io/thisispete/anytype-cli:${ANYTYPE_CLI_VERSION:-patched}"
+    image: "ghcr.io/anyproto/anytype-cli:${ANYTYPE_CLI_VERSION:-latest}"
     restart: "no"
     volumes:
       - anytype-cli-data:/root/.anytype
@@ -64,6 +65,12 @@ services:
     # and which isn't practical to verify without a real `docker compose
     # config` run. `$$` below is still Compose's own interpolation escape
     # (needed regardless of this form) -- not shell escaping.
+    #
+    # No retry loop here, unlike the main service below -- account
+    # *creation* (as opposed to recovering an existing stored account) was
+    # never observed to be flaky across any round of beta testing, including
+    # the controlled 5-trial batches. Only auto-login of an existing account
+    # showed the intermittent failure.
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -84,11 +91,6 @@ services:
           anytype auth create "$$ANYTYPE_CLI_ACCOUNT_NAME" > /root/.anytype/ACCOUNT_RECOVERY_KEY.txt 2>&1
           CREATE_STATUS=$$?
           chmod 600 /root/.anytype/ACCOUNT_RECOVERY_KEY.txt 2>/dev/null || true
-          # Kept at 5s (bumped from 2s during round 2, before the real root
-          # cause was found -- see docs/design.md Section 10). No longer
-          # load-bearing now that the auto-login path itself is patched to
-          # prefer yamux/TCP, but harmless as a settle-time margin, so left
-          # as-is rather than reverted back to 2s without a reason to.
           sleep 5
           kill $$SERVER_PID 2>/dev/null || true
           wait $$SERVER_PID 2>/dev/null || true
@@ -109,10 +111,7 @@ services:
     # `docker logs`.
 
   anytype-cli:
-    # Patched fork, not the official image -- see this file's header comment
-    # and docs/design.md Section 10. Override ANYTYPE_CLI_VERSION in your
-    # .env to pin a specific tag once you've confirmed one works.
-    image: "ghcr.io/thisispete/anytype-cli:${ANYTYPE_CLI_VERSION:-patched}"
+    image: "ghcr.io/anyproto/anytype-cli:${ANYTYPE_CLI_VERSION:-latest}"
     restart: unless-stopped
     depends_on:
       anytype-cli-bootstrap:
@@ -123,15 +122,86 @@ services:
       - "127.0.0.1:${ANYTYPE_CLI_API_PORT:-31012}:31012"
     volumes:
       - anytype-cli-data:/root/.anytype
+    environment:
+      # How many times to restart `anytype serve` if auto-login against the
+      # stored account doesn't succeed. At the ~60% per-attempt success rate
+      # measured with "Use kernel networking for UDP" enabled (beta round 8,
+      # 5-trial batches on both the official and a patched image -- see
+      # docs/design.md Section 10), independent per-attempt failure
+      # probability is ~0.4; N retries gives roughly 0.4^N expected overall
+      # failure. 10 retries -> ~0.4^10, effectively never.
+      - ANYTYPE_CLI_LOGIN_RETRIES=${ANYTYPE_CLI_LOGIN_RETRIES:-10}
+    # Overrides the image's default `ENTRYPOINT ["anytype"] CMD ["serve"]".
+    # `anytype serve` does NOT exit or crash when its own internal auto-login
+    # retry (3 attempts, ~2s apart, hardcoded in anytype-cli) is exhausted --
+    # it logs the failure and keeps running, gRPC server up but permanently
+    # unauthenticated. That means Docker's own `restart: unless-stopped`
+    # policy never even triggers (it only acts on process exit), and the
+    # container sits there reporting "healthy" (the healthcheck below only
+    # checks the port answers, not that login succeeded) while being useless
+    # for anything that needs an authenticated session. This wrapper
+    # substitutes for that: it watches anytype-heart's own log lines for the
+    # actual outcome and, on failure, kills and restarts the whole process
+    # itself -- a fresh process start re-triggers anytype-heart's internal
+    # 3-attempt sequence again, giving another independent shot at the ~60%
+    # per-attempt success rate rather than giving up after one.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        : > /tmp/serve.log
+        tail -f /tmp/serve.log &
+        TAIL_PID=$$!
+        attempt=1
+        while [ "$$attempt" -le "$$ANYTYPE_CLI_LOGIN_RETRIES" ]; do
+          START_LINE=$$(wc -l < /tmp/serve.log)
+          echo "=== anytype serve: outer attempt $$attempt/$$ANYTYPE_CLI_LOGIN_RETRIES ===" >> /tmp/serve.log
+          anytype serve >> /tmp/serve.log 2>&1 &
+          SERVER_PID=$$!
+          waited=0
+          RESULT=""
+          while [ "$$waited" -lt 60 ]; do
+            NEW_LOG=$$(tail -n +"$$((START_LINE + 1))" /tmp/serve.log)
+            if echo "$$NEW_LOG" | grep -qF "Successfully logged in using stored account key"; then
+              RESULT="success"
+            elif echo "$$NEW_LOG" | grep -qF "No stored account key found, skipping auto-login"; then
+              RESULT="success"
+            elif echo "$$NEW_LOG" | grep -qF "Failed to auto-login with account key after"; then
+              RESULT="failure"
+            fi
+            [ -n "$$RESULT" ] && break
+            sleep 1
+            waited=$$((waited + 1))
+          done
+          if [ "$$RESULT" = "success" ]; then
+            echo "=== auto-login OK on outer attempt $$attempt -- handing off ===" >> /tmp/serve.log
+            wait "$$SERVER_PID"
+            exit $$?
+          fi
+          echo "=== outer attempt $$attempt result: $${RESULT:-timeout after 60s} -- restarting ===" >> /tmp/serve.log
+          kill "$$SERVER_PID" 2>/dev/null || true
+          wait "$$SERVER_PID" 2>/dev/null || true
+          attempt=$$((attempt + 1))
+          sleep 2
+        done
+        echo "=== giving up after $$ANYTYPE_CLI_LOGIN_RETRIES outer attempts -- auto-login never succeeded ===" >> /tmp/serve.log
+        kill "$$TAIL_PID" 2>/dev/null || true
+        exit 1
     healthcheck:
       # Checks for an actual account, not just an open port -- "port open"
       # was true even with a permanently empty account (see the bootstrap
       # command's comment above), which is exactly what let that bug hide
-      # behind a "healthy" container status.
+      # behind a "healthy" container status. Still doesn't check that
+      # auto-login actually *succeeded* (vs. is mid-retry) -- the retry
+      # wrapper above owns that concern instead.
       test: ["CMD-SHELL", "test -f /root/.anytype/config.json && nc -z 127.0.0.1 31010 || exit 1"]
       interval: 30s
       timeout: 5s
-      start_period: 15s
+      # Generous: a full worst-case retry cycle (10 attempts x up to 60s
+      # each, plus 2s between) can take several minutes. Failures during
+      # start_period don't count toward "unhealthy" at all (Docker's own
+      # semantics), so this just avoids a spurious unhealthy status during a
+      # legitimate multi-attempt retry run.
+      start_period: 600s
       retries: 3
 
 volumes:
