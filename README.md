@@ -123,12 +123,19 @@ ANYTYPE_CHATS=                   # comma-separated chat_ids; blank = auto-discov
 ANYTYPE_REQUIRE_MENTION=true     # false = respond to everything, everywhere
 ANYTYPE_MENTION_TRIGGER=@hermes
 ANYTYPE_FREE_RESPONSE_CHATS=     # comma-separated chat_ids that ignore REQUIRE_MENTION
+ANYTYPE_ACCOUNT_ID=              # strongly recommended -- see .env.example, real @mentions need this
 ```
 
 `ANYTYPE_REQUIRE_MENTION=true` (the default) means Hermes only replies when
 addressed by `ANYTYPE_MENTION_TRIGGER` — good for a shared team room. Set it
 `false`, or list specific chats in `ANYTYPE_FREE_RESPONSE_CHATS`, for a solo
 space or a dedicated help room where every message should get a reply.
+
+Set `ANYTYPE_ACCOUNT_ID` too if you're using mention mode — a real
+@mention through Anytype's UI embeds the mentioned party's *display name*
+as literal text, not the trigger string, so without this the plugin can
+only catch people who type `@hermes` as plain text (confirmed live — see
+`.env.example`).
 
 ## Development
 

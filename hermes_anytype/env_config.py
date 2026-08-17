@@ -35,17 +35,53 @@ def env_bool(*values: Any, default: bool) -> bool:
     return default
 
 
-def should_respond(message_text: str, *, require_mention: bool, trigger: str) -> bool:
+def is_mentioned(marks: list[dict[str, Any]] | None, account_id: str | None) -> bool:
+    """Structural mention check against Anytype's real `marks` array.
+
+    Confirmed live (docs/design.md Section 4.1/10, beta round 11) that a
+    UI-driven @mention embeds the mentioned party's *display name* as
+    literal text -- e.g. "Untitled" for a bot whose profile name was never
+    set -- plus a separate `{"type": "mention", "param": <identity>}` mark
+    referencing their real participant/account id. A trigger-string
+    substring match alone misses every real UI mention whose display name
+    isn't literally the trigger text, which is the common case. `param` is
+    checked with `in` rather than `==` since its exact prefix format isn't
+    fully pinned down -- the confirmed live example had the account id as a
+    suffix of a longer string, not the whole value.
+    """
+    if not marks or not account_id:
+        return False
+    for mark in marks:
+        if mark.get("type") != "mention":
+            continue
+        if account_id in (mark.get("param") or ""):
+            return True
+    return False
+
+
+def should_respond(
+    message_text: str,
+    *,
+    require_mention: bool,
+    trigger: str,
+    marks: list[dict[str, Any]] | None = None,
+    account_id: str | None = None,
+) -> bool:
     """Per-chat mention/reply-all filter (docs/design.md Section 2, Section 4.1).
 
-    Structural mention detection (via TextMark spans) isn't wired in -- the
-    mark shape needs empirical verification against a running instance
-    (docs/design.md Section 9/Section 12). Falls back to a case-insensitive substring
-    match on the trigger string.
+    Two independent ways to count as "mentioned": a literal trigger-string
+    substring match (works for anyone who just types "@hermes" as plain
+    text), or a structural mention mark referencing the bot's own account
+    id (works for anyone who used the UI's real @mention feature -- see
+    is_mentioned's docstring for why the substring check alone isn't
+    enough). `marks`/`account_id` are optional so existing substring-only
+    call sites and tests keep working unchanged.
     """
     if not require_mention:
         return True
-    return trigger.lower() in message_text.lower()
+    if trigger.lower() in message_text.lower():
+        return True
+    return is_mentioned(marks, account_id)
 
 
 def has_required_config(api_key: str, base_url: str, space_id: str) -> bool:

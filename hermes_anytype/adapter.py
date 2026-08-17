@@ -68,6 +68,17 @@ class AnytypeAdapter(BasePlatformAdapter):
         ANYTYPE_FREE_RESPONSE_CHATS comma-separated chat_ids that respond to
                                      everything regardless of REQUIRE_MENTION
                                      (mirrors MATTERMOST_FREE_RESPONSE_CHANNELS)
+        ANYTYPE_ACCOUNT_ID          this identity's own Anytype account id
+                                     (printed during `anytype auth create` --
+                                     see docs/design.md Section 10). Needed
+                                     for structural mention detection
+                                     (env_config.is_mentioned) -- without it,
+                                     mention mode falls back to trigger-text
+                                     substring matching only, which misses
+                                     real UI-driven @mentions whenever the
+                                     bot's display name isn't literally the
+                                     trigger string (confirmed live, beta
+                                     round 11, Section 4.1).
     """
 
     def __init__(self, config: PlatformConfig, **kwargs: Any) -> None:
@@ -94,6 +105,9 @@ class AnytypeAdapter(BasePlatformAdapter):
         self._free_response_chats = set(
             split_csv(extra.get("free_response_chats") or os.getenv("ANYTYPE_FREE_RESPONSE_CHATS"))
         )
+        self._account_id = (
+            extra.get("account_id") or os.getenv("ANYTYPE_ACCOUNT_ID", "")
+        ).strip() or None
 
         self._tasks: list[asyncio.Task] = []
         self._recently_sent_ids: list[str] = []
@@ -193,8 +207,21 @@ class AnytypeAdapter(BasePlatformAdapter):
         message_id = message.get("id")
         if message_id and message_id in self._recently_sent_ids:
             return  # our own message, echoed back over the stream -- not a reply loop
-        text = message.get("text") or ""
-        if not should_respond(text, require_mention=require_mention, trigger=self._trigger):
+        # Confirmed live (beta round 11, docs/design.md Section 4.1): message
+        # text/marks are nested under "content", not top-level fields -- an
+        # earlier version of this code read message.get("text") directly,
+        # which silently returned "" for every message, in every mode, not
+        # just mention mode.
+        content = message.get("content") or {}
+        text = content.get("text") or ""
+        marks = content.get("marks") or []
+        if not should_respond(
+            text,
+            require_mention=require_mention,
+            trigger=self._trigger,
+            marks=marks,
+            account_id=self._account_id,
+        ):
             return
 
         author = message.get("creator") or {}
