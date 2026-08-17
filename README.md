@@ -110,7 +110,12 @@ the existing file instead:
 
 ```bash
 ANYTYPE_API_KEY=...              # Hermes's own identity's API key, not yours
-ANYTYPE_API_BASE_URL=http://127.0.0.1:31012
+# host.docker.internal, not 127.0.0.1 -- Hermes and the anytype-cli bot node
+# are normally two separate Docker Compose projects, so 127.0.0.1 from
+# inside Hermes's own container is Hermes's own loopback, not the bot
+# node's. See .env.example for the full explanation and the non-Docker-Hermes
+# case.
+ANYTYPE_API_BASE_URL=http://host.docker.internal:31012
 ANYTYPE_SPACE_ID=...
 
 # optional
