@@ -1,8 +1,22 @@
 # Runs Hermes's own Anytype identity as a headless anytype-cli node.
 #
 # Confirmed against anyproto/any-sync-dockercompose's own (optional,
-# commented-out) anytype-cli service block -- same official image, same
-# bootstrap-then-serve pattern. See docs/design.md Section 10.
+# commented-out) anytype-cli service block -- same bootstrap-then-serve
+# pattern, but NOT the official image. Uses a patched fork instead
+# (ghcr.io/thisispete/anytype-cli) -- see docs/design.md Section 10 for the
+# full investigation: the official anytype-cli always prefers QUIC over TCP
+# for the account auto-login step, with no way to opt out, and that
+# reproducibly times out under Docker Desktop for Mac. The patch (one line,
+# fork of anyproto/anytype-cli at github.com/thisispete/anytype-cli) sets
+# an existing-but-unexposed PreferYamuxTransport flag on just that one RPC
+# call. Not filed upstream yet -- deferred until confirmed working
+# end-to-end here first.
+#
+# Before using: confirm ghcr.io/thisispete/anytype-cli is set to public
+# visibility (Settings on the package page) -- packages pushed via a
+# GITHUB_TOKEN don't reliably inherit the source repo's public visibility,
+# and this wasn't independently verified (the token used to build it didn't
+# have the scope to check).
 #
 # This file is for the DEFAULT ANYTYPE NETWORK case (no self-hosted sync
 # backend). If you're self-hosting your own any-sync backend instead, don't
@@ -28,11 +42,10 @@
 
 services:
   anytype-cli-bootstrap:
-    # Once you've confirmed a working version, pin ANYTYPE_CLI_VERSION in
-    # your .env rather than trusting `latest` long-term -- reproducibility,
-    # and it removes version drift as a variable when debugging (beta
-    # round 2 couldn't fully rule it out, only found it unlikely).
-    image: "ghcr.io/anyproto/anytype-cli:${ANYTYPE_CLI_VERSION:-latest}"
+    # Patched fork, not the official image -- see this file's header comment
+    # and docs/design.md Section 10. Override ANYTYPE_CLI_VERSION in your
+    # .env to pin a specific tag once you've confirmed one works.
+    image: "ghcr.io/thisispete/anytype-cli:${ANYTYPE_CLI_VERSION:-patched}"
     restart: "no"
     volumes:
       - anytype-cli-data:/root/.anytype
@@ -71,14 +84,11 @@ services:
           anytype auth create "$$ANYTYPE_CLI_ACCOUNT_NAME" > /root/.anytype/ACCOUNT_RECOVERY_KEY.txt 2>&1
           CREATE_STATUS=$$?
           chmod 600 /root/.anytype/ACCOUNT_RECOVERY_KEY.txt 2>/dev/null || true
-          # Low-confidence guess, not a confirmed fix: bumped from 2s to 5s
-          # in case the new identity needs more time to settle with the
-          # any-sync coordinator before this process (and its network
-          # session) is torn down. Beta round 2 hit a DeadlineExceeded/
-          # signature-invalid failure on the *next* container's auto-login
-          # against this same stored identity -- the UDP/QUIC buffer-size
-          # lead in docs/design.md Section 10 is the stronger suspect, this
-          # is just a cheap thing to also try.
+          # Kept at 5s (bumped from 2s during round 2, before the real root
+          # cause was found -- see docs/design.md Section 10). No longer
+          # load-bearing now that the auto-login path itself is patched to
+          # prefer yamux/TCP, but harmless as a settle-time margin, so left
+          # as-is rather than reverted back to 2s without a reason to.
           sleep 5
           kill $$SERVER_PID 2>/dev/null || true
           wait $$SERVER_PID 2>/dev/null || true
@@ -99,11 +109,10 @@ services:
     # `docker logs`.
 
   anytype-cli:
-    # Once you've confirmed a working version, pin ANYTYPE_CLI_VERSION in
-    # your .env rather than trusting `latest` long-term -- reproducibility,
-    # and it removes version drift as a variable when debugging (beta
-    # round 2 couldn't fully rule it out, only found it unlikely).
-    image: "ghcr.io/anyproto/anytype-cli:${ANYTYPE_CLI_VERSION:-latest}"
+    # Patched fork, not the official image -- see this file's header comment
+    # and docs/design.md Section 10. Override ANYTYPE_CLI_VERSION in your
+    # .env to pin a specific tag once you've confirmed one works.
+    image: "ghcr.io/thisispete/anytype-cli:${ANYTYPE_CLI_VERSION:-patched}"
     restart: unless-stopped
     depends_on:
       anytype-cli-bootstrap:
