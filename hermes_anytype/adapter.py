@@ -26,7 +26,13 @@ from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
 
 from .anytype_client import AnytypeClient, AnytypeConfig
-from .env_config import env_bool, has_required_config, should_respond, split_csv
+from .env_config import (
+    env_bool,
+    has_required_config,
+    parse_message_author,
+    should_respond,
+    split_csv,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +195,21 @@ class AnytypeAdapter(BasePlatformAdapter):
                     backoff = _RECONNECT_BASE_DELAY  # reset on a good connection
                     if event["event"] != "message_added":
                         continue
-                    await self._handle_anytype_message(chat_id, event["data"], require_mention)
+                    # Isolated from the stream's own try/except on purpose:
+                    # a bug in handling *one* message (an unexpected field
+                    # shape, say) shouldn't force a full SSE reconnect for
+                    # the whole chat. Beta round 12 found exactly this --
+                    # every message was hitting a real crash here, which
+                    # tore down the connection on every single message
+                    # instead of just failing that one message loudly.
+                    try:
+                        await self._handle_anytype_message(chat_id, event["data"], require_mention)
+                    except Exception:
+                        logger.exception(
+                            "Anytype: failed to handle message %s in chat %s",
+                            event["data"].get("id"),
+                            chat_id,
+                        )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -224,9 +244,7 @@ class AnytypeAdapter(BasePlatformAdapter):
         ):
             return
 
-        author = message.get("creator") or {}
-        user_id = author.get("id") or message.get("creator_id")
-        user_name = author.get("name")
+        user_id, user_name = parse_message_author(message)
         source = self.build_source(
             chat_id=chat_id,
             chat_type="channel",

@@ -88,3 +88,21 @@ def has_required_config(api_key: str, base_url: str, space_id: str) -> bool:
     """docs/design.md Section 6: fail loud at startup on bad/missing config, never
     silently no-op."""
     return bool(api_key.strip() and base_url.strip() and space_id.strip())
+
+
+def parse_message_author(message: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Extract (user_id, user_name) from a chat message payload.
+
+    Confirmed live (docs/design.md Section 4.1, beta round 12): `creator`
+    is a plain participant-id string (e.g. "_participant_bafyre..."), not a
+    nested object -- an earlier version of this code assumed a dict shape
+    (`message["creator"]["id"]`) and crashed with AttributeError on every
+    single message once mention detection started actually matching (the
+    crash path was unreachable before that fix landed, since should_respond
+    always returned False first -- which is why it went unnoticed until
+    then). The display name is a separate flat `creator_name` field, never
+    nested under `creator` either.
+    """
+    user_id = message.get("creator") or message.get("creator_id")
+    user_name = message.get("creator_name")
+    return user_id, user_name

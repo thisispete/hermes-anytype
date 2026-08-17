@@ -2,6 +2,7 @@ from hermes_anytype.env_config import (
     env_bool,
     has_required_config,
     is_mentioned,
+    parse_message_author,
     should_respond,
     split_csv,
 )
@@ -114,3 +115,32 @@ def test_should_respond_still_works_without_marks_or_account_id():
     """Backward compatible: existing substring-only call sites unaffected."""
     assert should_respond("hey @hermes", require_mention=True, trigger="@hermes")
     assert not should_respond("no trigger", require_mention=True, trigger="@hermes")
+
+
+# -- Message author parsing (docs/design.md Section 4.1, beta round 12) --
+#
+# `creator` is a plain participant-id string in the real payload, not a
+# nested {"id": ..., "name": ...} object -- an earlier version of this code
+# assumed the dict shape and crashed with AttributeError on every message
+# once mention detection started actually matching.
+
+def test_parse_message_author_reads_flat_creator_and_creator_name():
+    message = {
+        "id": "msg1",
+        "creator": "_participant_bafyre_A9GoTfqnjjBe2HzAMVcLvorSXG4ebPxSnQqfh3FdLLBD4SAQ",
+        "creator_name": "▲PETE",
+    }
+    user_id, user_name = parse_message_author(message)
+    assert user_id == "_participant_bafyre_A9GoTfqnjjBe2HzAMVcLvorSXG4ebPxSnQqfh3FdLLBD4SAQ"
+    assert user_name == "▲PETE"
+
+
+def test_parse_message_author_falls_back_to_creator_id():
+    message = {"id": "msg1", "creator_id": "fallback-id"}
+    user_id, user_name = parse_message_author(message)
+    assert user_id == "fallback-id"
+    assert user_name is None
+
+
+def test_parse_message_author_handles_missing_fields():
+    assert parse_message_author({}) == (None, None)
