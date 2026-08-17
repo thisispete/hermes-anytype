@@ -130,6 +130,39 @@ async def test_add_chat_message_includes_reply_to(client, fake_server):
     assert fake_server.requests[0]["body"] == {"text": "hi", "reply_to_message_id": "msg1"}
 
 
+async def test_stream_chat_messages_overrides_session_default_timeout(fake_server, mocker):
+    """Regression test for a real bug found live: the session's default
+    `total=30s` timeout (sized for quick REST calls) was being inherited by
+    the SSE stream too, force-cancelling a perfectly healthy connection
+    every ~30s regardless of activity. stream_chat_messages must pass its
+    own per-call timeout override with no `total` ceiling."""
+    fake_server.set_response(
+        "GET", "/v1/spaces/space1/chats/chat1/messages/stream", payload={}
+    )
+    config = AnytypeConfig(api_key="test-key", base_url=fake_server.base_url, space_id="space1")
+    async with AnytypeClient(config) as client:
+        # Session is created lazily; force creation first so there's a real
+        # bound session to spy on. `wraps=` keeps the request going through
+        # to the real (fake) server instead of re-implementing it here.
+        session = await client._ensure_session()
+        get_spy = mocker.patch.object(session, "get", wraps=session.get)
+
+        try:
+            async for _event in client.stream_chat_messages("chat1"):
+                break  # fake_server's JSON response isn't valid SSE; loop just needs to not hang
+        except Exception:
+            pass  # only the call arguments matter for this test, not a full successful stream
+
+        assert get_spy.call_count == 1
+        _args, kwargs = get_spy.call_args
+        timeout = kwargs.get("timeout")
+        assert timeout is not None, "stream_chat_messages must pass an explicit timeout override"
+        assert timeout.total is None, "a `total` timeout would cancel a long-lived SSE stream"
+        assert timeout.sock_read is not None and timeout.sock_read > 30, (
+            "sock_read should be well above the heartbeat interval, not left unset"
+        )
+
+
 # -- SSE parsing (no HTTP mocking needed -- see anytype_client.py) ----------
 
 

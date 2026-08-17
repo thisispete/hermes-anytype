@@ -252,7 +252,20 @@ class AnytypeClient:
         path = f"/v1/spaces/{self._config.space_id}/chats/{chat_id}/messages/stream"
         headers = {"Anytype-Heartbeat-Seconds": str(heartbeat_seconds)}
         session = await self._ensure_session()
-        async with session.get(path, headers=headers) as response:
+        # The session's default timeout (self._timeout, `total=30s`, sized
+        # for quick REST calls) must NOT apply here -- aiohttp's `total`
+        # cancels the whole request, including an open streaming read, once
+        # elapsed, regardless of ongoing activity. Confirmed live: with the
+        # session default, the SSE stream force-reconnected every ~30s even
+        # on a perfectly healthy connection. `total=None` removes that
+        # ceiling; `sock_read` instead gives a real dead-connection
+        # detector -- no bytes (including heartbeat comment lines) for this
+        # long really does mean the connection died. Set well above
+        # heartbeat_seconds so healthy heartbeats never trip it.
+        stream_timeout = aiohttp.ClientTimeout(
+            total=None, connect=10, sock_read=heartbeat_seconds * 3
+        )
+        async with session.get(path, headers=headers, timeout=stream_timeout) as response:
             response.raise_for_status()
             async for event in parse_sse_lines(response.content):
                 yield event
