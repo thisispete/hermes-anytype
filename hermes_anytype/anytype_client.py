@@ -268,6 +268,24 @@ class AnytypeClient:
         async with session.get(path, headers=headers, timeout=stream_timeout) as response:
             response.raise_for_status()
             async for event in parse_sse_lines(response.content):
+                # The real wire payload wraps the actual message one level
+                # deeper than parse_sse_lines' generic {"event", "data"}
+                # envelope: `data:` is itself
+                # {"type": "message_added", "payload": {"message": {...}}}.
+                # parse_sse_lines is domain-agnostic on purpose (testable
+                # against a plain byte iterator, no anytype-specific
+                # knowledge), so it can't unwrap this -- confirmed live that
+                # every consumer downstream was silently getting the wrapper
+                # object instead of the real message, so message.get("id")/
+                # ("content") always returned None/{} and nothing ever
+                # matched, with no error anywhere since {} and None are both
+                # individually valid, just wrong.
+                data = event.get("data")
+                if isinstance(data, dict) and "payload" in data:
+                    inner = data.get("payload") or {}
+                    message = inner.get("message")
+                    if message is not None:
+                        event = {**event, "data": message}
                 yield event
 
 

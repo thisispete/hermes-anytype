@@ -162,7 +162,18 @@ class AnytypeAdapter(BasePlatformAdapter):
         except Exception as exc:
             logger.exception("Anytype: failed to send message to chat %s", chat_id)
             return SendResult(success=False, error=str(exc))
-        message_id = result.get("id") if isinstance(result, dict) else None
+        # Confirmed live (beta round 14, self-reply loop): the real
+        # add-chat-message response is {"message_id": "..."}, not {"id":
+        # "..."} -- result.get("id") always returned None, so
+        # _remember_sent() never actually recorded anything, and the
+        # dedup check in _handle_anytype_message could never match a
+        # single self-sent message. With ANYTYPE_REQUIRE_MENTION=false
+        # this produced an immediate infinite self-reply loop (every
+        # reply looked like a new incoming message eligible for another
+        # reply); with mention-gating on it was the same latent bug, just
+        # far less likely to trigger since a reply rarely re-contains the
+        # trigger string or a self-referencing structural mention.
+        message_id = result.get("message_id") if isinstance(result, dict) else None
         if message_id:
             self._remember_sent(message_id)
         return SendResult(success=True, message_id=message_id, raw_response=result)
@@ -227,6 +238,24 @@ class AnytypeAdapter(BasePlatformAdapter):
         message_id = message.get("id")
         if message_id and message_id in self._recently_sent_ids:
             return  # our own message, echoed back over the stream -- not a reply loop
+        # Confirmed live (beta round 14, self-reply loop): the sent-id cache
+        # above only catches messages sent through THIS adapter's own
+        # send(). Hermes core sends some messages through other paths (e.g.
+        # the "Interrupting current task..."/"No home channel..." system
+        # notifications observed live) that never touch _remember_sent(),
+        # so they were never in the cache and kept getting treated as fresh
+        # inbound messages from the bot's own account -- an immediate
+        # self-sustaining loop once ANYTYPE_REQUIRE_MENTION=false removed
+        # the (accidental) protection of the trigger/mention check rarely
+        # matching a reply's own text. This is a more fundamental filter:
+        # if the message's own author IS this identity, it can never be a
+        # real inbound message, full stop, regardless of which path sent
+        # it or whether the id cache happened to catch it. `in` rather than
+        # `==` matches is_mentioned()'s convention -- creator is a longer
+        # "_participant_<space>_<account id>" string, not a bare account id.
+        author_id = message.get("creator") or message.get("creator_id") or ""
+        if self._account_id and self._account_id in author_id:
+            return
         # Confirmed live (beta round 11, docs/design.md Section 4.1): message
         # text/marks are nested under "content", not top-level fields -- an
         # earlier version of this code read message.get("text") directly,
@@ -284,4 +313,16 @@ def register(ctx) -> None:
         required_env=["ANYTYPE_API_KEY", "ANYTYPE_API_BASE_URL", "ANYTYPE_SPACE_ID"],
         install_hint="",
         emoji="\U0001f537",
+        # Confirmed live (beta round 13): gateway/authz_mixin.py's
+        # _is_user_authorized() keys its per-platform allowlist/allow-all
+        # checks off hardcoded dicts covering only Hermes's built-in
+        # platforms -- a third-party plugin platform is never in those
+        # dicts. It DOES fall back to the plugin registry for
+        # allowed_users_env/allow_all_env, but only if the plugin actually
+        # declares them here; without this, every inbound message is
+        # unconditionally denied ("Dropping message from unauthorized
+        # user... user=None") regardless of mention detection or anything
+        # else being correct -- the message never even reaches should_respond.
+        allowed_users_env="ANYTYPE_ALLOWED_USERS",
+        allow_all_env="ANYTYPE_ALLOW_ALL_USERS",
     )
