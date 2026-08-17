@@ -8,6 +8,7 @@ the model.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .anytype_client import AnytypeClient
@@ -167,28 +168,38 @@ def make_tool_handlers(client: AnytypeClient) -> dict[str, Any]:
     """Build the args-dict handler closures ctx.register_tool() expects,
     bound to a single shared AnytypeClient."""
 
-    async def _search_objects(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+    # Confirmed live (beta round 15): Hermes's tool dispatch
+    # (tools/registry.py's _normalize_handler_result) only accepts a plain
+    # str result (or the {"_multimodal": True, "content": [...]} envelope,
+    # not used here) -- anything else, including a bare dict, is rejected
+    # outright with "Tool handler returned unsupported result type: dict"
+    # before the LLM ever sees it. Every handler below now returns
+    # json.dumps(...) instead of the raw dict.
+
+    async def _search_objects(args: dict[str, Any], **_kwargs: Any) -> str:
         results = await search_objects(client, args["query"], args.get("types"))
-        return {"results": results}
+        return json.dumps({"results": results})
 
-    async def _get_type(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
-        return await get_type(client, args["type_key"])
+    async def _get_type(args: dict[str, Any], **_kwargs: Any) -> str:
+        return json.dumps(await get_type(client, args["type_key"]))
 
-    async def _create_object(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+    async def _create_object(args: dict[str, Any], **_kwargs: Any) -> str:
         try:
-            return await create_object(
+            result = await create_object(
                 client, args["type_key"], args["name"], args.get("properties")
             )
         except PropertyValidationError as exc:
-            return {"error": str(exc)}
+            return json.dumps({"error": str(exc)})
+        return json.dumps(result)
 
-    async def _update_object(args: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+    async def _update_object(args: dict[str, Any], **_kwargs: Any) -> str:
         try:
-            return await update_object(
+            result = await update_object(
                 client, args["object_id"], args["type_key"], args["properties"]
             )
         except PropertyValidationError as exc:
-            return {"error": str(exc)}
+            return json.dumps({"error": str(exc)})
+        return json.dumps(result)
 
     return {
         "anytype_search_objects": _search_objects,

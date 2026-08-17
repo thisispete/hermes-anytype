@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from hermes_anytype.tools import (
@@ -88,6 +90,14 @@ async def test_update_object_normalizes_and_forwards_object_id():
 
 # -- Handler wrappers (the handler(args, **kwargs) shape Hermes's registry
 # actually calls -- see tools.py's registration section docstring) ---------
+#
+# Confirmed live (beta round 15): Hermes's tool dispatch
+# (tools/registry.py's _normalize_handler_result) only accepts a plain str
+# result -- a bare dict is rejected outright with "Tool handler returned
+# unsupported result type: dict" before the LLM ever sees it. Every handler
+# now returns json.dumps(...), so these assert on the real str contract
+# (parsing it back to compare content) instead of the dict shape that was
+# actually unreachable through Hermes's own dispatch.
 
 
 async def test_search_objects_handler_wraps_results():
@@ -96,7 +106,8 @@ async def test_search_objects_handler_wraps_results():
 
     result = await handlers["anytype_search_objects"]({"query": "roadmap"})
 
-    assert result == {"results": [{"id": "obj1"}]}
+    assert isinstance(result, str)
+    assert json.loads(result) == {"results": [{"id": "obj1"}]}
     assert client.search_calls == [("roadmap", {"types": None})]
 
 
@@ -108,8 +119,10 @@ async def test_create_object_handler_returns_corrective_error_dict():
         {"type_key": "task", "name": "Ship it", "properties": {"assignee": "bob"}}
     )
 
-    assert "error" in result
-    assert "'assignee' not found on type 'task'" in result["error"]
+    assert isinstance(result, str)
+    parsed = json.loads(result)
+    assert "error" in parsed
+    assert "'assignee' not found on type 'task'" in parsed["error"]
     assert not client.create_object_calls
 
 
@@ -121,7 +134,9 @@ async def test_update_object_handler_returns_corrective_error_dict():
         {"object_id": "obj42", "type_key": "task", "properties": {"assignee": "bob"}}
     )
 
-    assert "error" in result
+    assert isinstance(result, str)
+    parsed = json.loads(result)
+    assert "error" in parsed
     assert not client.update_object_calls
 
 
@@ -131,4 +146,5 @@ async def test_get_type_handler_returns_type_info():
 
     result = await handlers["anytype_get_type"]({"type_key": "task"})
 
-    assert result == TASK_TYPE
+    assert isinstance(result, str)
+    assert json.loads(result) == TASK_TYPE
