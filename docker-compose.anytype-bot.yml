@@ -155,7 +155,19 @@ services:
         while [ "$$attempt" -le "$$ANYTYPE_CLI_LOGIN_RETRIES" ]; do
           START_LINE=$$(wc -l < /tmp/serve.log)
           echo "=== anytype serve: outer attempt $$attempt/$$ANYTYPE_CLI_LOGIN_RETRIES ===" >> /tmp/serve.log
-          anytype serve >> /tmp/serve.log 2>&1 &
+          # --listen-address is required for anything outside this
+          # container's own network namespace to reach the REST API.
+          # Confirmed by direct testing (hermes-anytype plugin wiring, first
+          # live round): the default 127.0.0.1 bind means `docker exec`
+          # commands work fine (real same-netns loopback), but a request
+          # routed through Docker Desktop's host-published-port path --
+          # from the host itself, or from another container via
+          # host.docker.internal -- gets a TCP handshake followed by a
+          # silent, 100%-reproducible empty reply, never reaching the
+          # listener. Binding 0.0.0.0 here fixes that; the host-side
+          # publish below stays scoped to 127.0.0.1 so external network
+          # exposure is unchanged.
+          anytype serve --listen-address 0.0.0.0:31012 >> /tmp/serve.log 2>&1 &
           SERVER_PID=$$!
           waited=0
           RESULT=""
