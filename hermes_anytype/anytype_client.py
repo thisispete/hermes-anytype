@@ -79,6 +79,8 @@ class AnytypeClient:
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         session = await self._ensure_session()
+        error: AnytypeAPIError | None = None
+        result: Any = None
         async with session.request(method, path, **kwargs) as response:
             body = await response.read()
             if response.status >= 400:
@@ -88,10 +90,12 @@ class AnytypeClient:
                 except (ValueError, UnicodeDecodeError):
                     payload = None
                     message = body.decode(errors="replace")
-                raise AnytypeAPIError(response.status, message, payload)
-            if not body:
-                return None
-            return json.loads(body)
+                error = AnytypeAPIError(response.status, message, payload)
+            elif body:
+                result = json.loads(body)
+        if error is not None:
+            raise error
+        return result
 
     # -- Schema introspection --------------------------------------------
 
@@ -219,7 +223,20 @@ class AnytypeClient:
             f"/v1/spaces/{self._config.space_id}/chats/{chat_id}/messages",
             params=params,
         )
-        return data.get("data", data)
+        # Confirmed live (beta round 18): this endpoint's response shape is
+        # {"messages": [...]}, unlike every other list endpoint in this API
+        # ({"data": [...]}) -- the generic data.get("data", data) fallback
+        # used elsewhere silently returned the whole response dict here
+        # (no "data" key), and the caller's `for message in messages`
+        # iterated over that dict's keys (the single string "messages")
+        # instead of message objects, crashing with an unhandled
+        # AttributeError on message.get("id") every single time. That
+        # crash happened outside any try/except in the call chain, so the
+        # _run_chat task died silently on its very first priming call with
+        # no exception ever logged anywhere -- indistinguishable from a
+        # hang. See docs/design.md Section 4.1 for the priming step this
+        # feeds.
+        return data.get("messages", [])
 
     async def read_chat_messages(
         self, chat_id: str, *, message_type: str = "messages"

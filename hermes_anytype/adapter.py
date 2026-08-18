@@ -163,7 +163,30 @@ class AnytypeAdapter(BasePlatformAdapter):
 
         self._closing = False
         self._tasks = [asyncio.create_task(self._run_chat(chat_id)) for chat_id in chat_ids]
+        for task in self._tasks:
+            task.add_done_callback(self._log_run_chat_done)
         return True
+
+    def _log_run_chat_done(self, task: asyncio.Task) -> None:
+        """Surface an unexpected _run_chat exit that would otherwise be
+        silent (beta round 18): _run_chat is supposed to loop until
+        disconnect() cancels it. If it ever ends any other way -- an
+        uncaught exception, or a cancellation nobody requested -- nothing
+        else observes that task's result, so by default asyncio logs a
+        cancellation as nothing at all and an exception only via its own
+        default handler (which this deployment wasn't capturing). That
+        made a real, 100%-reproducible bug (get_chat_messages returning
+        the wrong shape, see anytype_client.py) look exactly like an
+        indefinite silent hang for days. This is the fix for the next one.
+        """
+        if self._closing:
+            return  # expected: disconnect() cancelled it
+        if task.cancelled():
+            logger.error("Anytype: _run_chat task for a chat ended via unexpected cancellation")
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Anytype: _run_chat task for a chat died with an uncaught exception", exc_info=exc)
 
     async def disconnect(self) -> None:
         self._closing = True

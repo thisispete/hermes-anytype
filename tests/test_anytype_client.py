@@ -130,6 +130,29 @@ async def test_add_chat_message_includes_reply_to(client, fake_server):
     assert fake_server.requests[0]["body"] == {"text": "hi", "reply_to_message_id": "msg1"}
 
 
+async def test_get_chat_messages_unwraps_messages_key(client, fake_server):
+    """Regression test for a real bug found live: this endpoint's response
+    shape is {"messages": [...]}, unlike every other list endpoint in this
+    API ({"data": [...]}). The generic data.get("data", data) fallback used
+    elsewhere silently returned the whole response dict here (no "data"
+    key present), and the caller's `for message in messages` then iterated
+    over that dict's keys -- the single string "messages" -- crashing with
+    an unhandled AttributeError on message.get("id") every single call.
+    That crash happened outside any try/except in the call chain, so the
+    adapter's per-chat task died silently on its very first priming call
+    with no exception ever logged -- indistinguishable from a hang.
+    """
+    fake_server.set_response(
+        "GET",
+        "/v1/spaces/space1/chats/chat1/messages",
+        payload={"messages": [{"id": "msg1"}, {"id": "msg2"}]},
+    )
+
+    messages = await client.get_chat_messages("chat1")
+
+    assert messages == [{"id": "msg1"}, {"id": "msg2"}]
+
+
 async def test_stream_chat_messages_overrides_session_default_timeout(fake_server, mocker):
     """Regression test for a real bug found live: the session's default
     `total=30s` timeout (sized for quick REST calls) was being inherited by
