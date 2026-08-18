@@ -312,7 +312,14 @@ async def parse_sse_lines(lines: AsyncIterator[bytes]) -> AsyncIterator[dict[str
             data_lines = []
             continue
         if line.startswith(":"):
-            continue  # heartbeat/comment line
+            # Confirmed live (beta round 16): yielding a real event here,
+            # rather than silently swallowing it, is what lets a consumer
+            # actually detect "connection went quiet" -- a dead connection
+            # that never raises on either end (see adapter.py's
+            # _STREAM_ACTIVITY_TIMEOUT) is otherwise indistinguishable from
+            # a healthy one with nothing new to report.
+            yield {"event": "heartbeat", "data": None}
+            continue
         if line.startswith("event:"):
             event_name = line[len("event:"):].strip()
         elif line.startswith("data:"):

@@ -193,14 +193,22 @@ async def test_parse_sse_lines_defaults_event_name_to_message():
     assert events == [{"event": "message", "data": {"id": "msg1"}}]
 
 
-async def test_parse_sse_lines_ignores_heartbeat_comments():
+async def test_parse_sse_lines_yields_heartbeat_comments_as_real_events():
+    # Confirmed live (beta round 16): silently swallowing heartbeats (the
+    # old behavior) made a dead connection indistinguishable from a
+    # healthy one with nothing new to report -- adapter.py's activity
+    # watchdog needs a real event for every heartbeat to detect genuine
+    # silence.
     events = [
         event
         async for event in parse_sse_lines(
             _lines(":heartbeat", 'data: {"id": "msg1"}', "")
         )
     ]
-    assert events == [{"event": "message", "data": {"id": "msg1"}}]
+    assert events == [
+        {"event": "heartbeat", "data": None},
+        {"event": "message", "data": {"id": "msg1"}},
+    ]
 
 
 async def test_parse_sse_lines_skips_malformed_json():

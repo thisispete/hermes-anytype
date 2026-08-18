@@ -48,6 +48,21 @@ _SEEN_ID_CACHE_SIZE = 500
 # (including on every future reconnect, not just the first connection)
 # would be reprocessed as if new every time.
 _PRIME_MESSAGE_LIMIT = 200
+# Confirmed live (beta round 16): the SSE connection can go silently dead
+# -- no exception on either end, ever, at intervals ranging from ~90s to
+# 8+ minutes across repeated tests -- leaving _run_chat's own reconnect
+# logic never triggered, since it depends on an exception that never
+# comes. Rather than chase the exact transport-level cause further, this
+# is a activity-based watchdog independent of it: anytype_client.py's
+# stream_chat_messages now yields a real event for every heartbeat
+# comment line too (previously silently swallowed), so genuine silence --
+# not even a heartbeat -- for this long is itself the failure signal,
+# regardless of whether anything ever raises. Must stay well below
+# aiohttp's own sock_read timeout (heartbeat_seconds * 3 = 90s default,
+# anytype_client.py) so this watchdog is the one that actually fires.
+# 2x the 30s heartbeat default -- if that default changes, this should
+# move with it.
+_STREAM_ACTIVITY_TIMEOUT = 60.0
 
 
 def check_anytype_requirements() -> bool:
@@ -244,8 +259,35 @@ class AnytypeAdapter(BasePlatformAdapter):
         require_mention = self._require_mention and chat_id not in self._free_response_chats
         await self._prime_seen_messages(chat_id)
         while not self._closing:
+            reconnect_reason: str | None = None
+            stream = self.client.stream_chat_messages(chat_id).__aiter__()
             try:
-                async for event in self.client.stream_chat_messages(chat_id):
+                while True:
+                    try:
+                        event = await asyncio.wait_for(
+                            stream.__anext__(), timeout=_STREAM_ACTIVITY_TIMEOUT
+                        )
+                    except StopAsyncIteration:
+                        reconnect_reason = "stream ended"
+                        break
+                    except asyncio.TimeoutError:
+                        # Confirmed live (beta round 16): a dead connection
+                        # can produce zero log output and never raise on
+                        # either end, at intervals from ~90s to 8+ minutes
+                        # across repeated tests -- the exception-based
+                        # reconnect logic below never triggers because
+                        # nothing ever raises into it. This is independent
+                        # of that: genuine silence, not even a heartbeat
+                        # (see anytype_client.py's parse_sse_lines, which
+                        # now yields one instead of swallowing it), for
+                        # _STREAM_ACTIVITY_TIMEOUT is itself the failure
+                        # signal, regardless of whether the underlying
+                        # transport ever tells us anything went wrong.
+                        reconnect_reason = (
+                            f"no activity (not even a heartbeat) for "
+                            f"{_STREAM_ACTIVITY_TIMEOUT:.0f}s"
+                        )
+                        break
                     backoff = _RECONNECT_BASE_DELAY  # reset on a good connection
                     if event["event"] != "message_added":
                         continue
@@ -265,15 +307,52 @@ class AnytypeAdapter(BasePlatformAdapter):
                             chat_id,
                         )
             except asyncio.CancelledError:
-                raise
+                # Confirmed live (beta round 16): blindly re-raising every
+                # CancelledError here was itself a bug, not just a safe
+                # default. aiohttp enforces its stream_timeout (anytype_
+                # client.py's sock_read=heartbeat_seconds*3) by cancelling
+                # whatever task is currently awaiting the read -- that
+                # cancellation is *supposed* to get converted to a clean
+                # TimeoutError before escaping aiohttp's own timeout context,
+                # but a raw CancelledError reaching here instead would look
+                # exactly like the silent-death symptom above. A *real*
+                # external cancellation (disconnect() calling task.cancel())
+                # always sets self._closing = True first -- so that's the
+                # one reliable signal to distinguish "actually shutting
+                # down, let this propagate" from "something cancelled us
+                # internally, this is just a dead connection, treat it like
+                # any other reconnectable failure."
+                if self._closing:
+                    raise
+                reconnect_reason = "cancelled unexpectedly (not a real shutdown)"
             except Exception:
+                reconnect_reason = "exception"
                 logger.exception(
-                    "Anytype: SSE stream for chat %s dropped, reconnecting in %.0fs",
+                    "Anytype: SSE stream for chat %s dropped (%s)",
+                    chat_id,
+                    reconnect_reason,
+                )
+            finally:
+                # Best-effort: force-close the abandoned generator (and the
+                # aiohttp response/connection it holds) rather than leaving
+                # it for eventual GC, especially important on the timeout
+                # path where the underlying connection is exactly the thing
+                # suspected of being dead already.
+                try:
+                    await stream.aclose()
+                except Exception:
+                    pass
+            if reconnect_reason and reconnect_reason != "exception":
+                logger.warning(
+                    "Anytype: SSE stream for chat %s reconnecting in %.0fs -- %s",
                     chat_id,
                     backoff,
+                    reconnect_reason,
                 )
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, _RECONNECT_MAX_DELAY)
+            if self._closing:
+                return
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _RECONNECT_MAX_DELAY)
 
     async def _handle_anytype_message(
         self, chat_id: str, message: dict[str, Any], require_mention: bool
