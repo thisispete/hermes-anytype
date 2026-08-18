@@ -15,6 +15,7 @@ callers per the error-handling table in docs/design.md Section 6).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -45,12 +46,32 @@ class AnytypeClient:
     The aiohttp session is created lazily on first use rather than in
     __init__, since __init__ may run outside a running event loop (e.g. at
     plugin registration time).
+
+    This client is long-lived (constructed once, shared across every call
+    for the lifetime of the process), but not every caller runs on the same
+    event loop. The adapter's SSE/reconnect loop runs directly on the
+    gateway's single long-lived loop, but tool-handler calls (tools.py) are
+    bridged through Hermes core's model_tools._run_async(), which -- since
+    the gateway loop is already running -- spins up a brand-new disposable
+    thread with its own brand-new event loop for *each call*, then closes
+    that loop when the call returns. A bare `aiohttp.ClientSession` is
+    bound to whichever loop it was created on; reusing one from a
+    different (and, after the first call, already-closed) loop breaks in
+    ways that only surface on the *second* use, with errors like "Timeout
+    context manager should be used inside a task" -- confirmed live, beta
+    round 19: search_objects (the first tool call) worked, get_type (the
+    second) didn't, on an unmodified session-reuse check that only looked
+    at `.closed`, never at which loop created it. _ensure_session tracks
+    the creating loop and recreates the session whenever the current loop
+    doesn't match, rather than assuming any non-closed session is safe to
+    reuse.
     """
 
     def __init__(self, config: AnytypeConfig, *, timeout: float = 30.0) -> None:
         self._config = config
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         self._session: aiohttp.ClientSession | None = None
+        self._session_loop: asyncio.AbstractEventLoop | None = None
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -59,12 +80,18 @@ class AnytypeClient:
         }
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
+        loop = asyncio.get_running_loop()
+        if self._session is None or self._session.closed or self._session_loop is not loop:
+            # A session from a different loop can't be safely awaited-closed
+            # here -- its loop may already be gone by the time we notice.
+            # Just drop the reference; the disposable per-call loop that
+            # created it tears its own resources down on close().
             self._session = aiohttp.ClientSession(
                 base_url=self._config.base_url.rstrip("/"),
                 headers=self._headers(),
                 timeout=self._timeout,
             )
+            self._session_loop = loop
         return self._session
 
     async def aclose(self) -> None:

@@ -8,6 +8,7 @@ requests through a real, tiny aiohttp server instead only depends on
 aiohttp's own stable public API, so it can't lag behind aiohttp itself.
 """
 
+import asyncio
 import json
 
 import pytest
@@ -151,6 +152,65 @@ async def test_get_chat_messages_unwraps_messages_key(client, fake_server):
     messages = await client.get_chat_messages("chat1")
 
     assert messages == [{"id": "msg1"}, {"id": "msg2"}]
+
+
+def test_ensure_session_recreates_when_the_running_loop_changes():
+    """Regression test for a real bug found live (beta round 19): tool
+    handlers (tools.py) are dispatched through Hermes core's
+    model_tools._run_async(), which -- since the gateway's own loop is
+    already running -- spins up a brand-new disposable event loop for
+    *each call* and closes it when the call returns. This client is a
+    long-lived singleton shared across every call, so _ensure_session()
+    was reusing the same aiohttp.ClientSession (only checking `.closed`,
+    never which loop created it) across calls that actually ran on
+    different, and after the first call already-dead, event loops. The
+    first tool call worked (session freshly bound to that call's loop);
+    every call after it broke with aiohttp errors like "Timeout context
+    manager should be used inside a task" -- confirmed live: search_objects
+    (first) succeeded, get_type (second) didn't. A bare aiohttp session is
+    loop-bound; _ensure_session must recreate it whenever the current loop
+    doesn't match the loop it was created on, not just when it's closed.
+
+    Drives two independent event loops directly (the same pattern
+    model_tools._run_async uses) rather than relying on pytest-asyncio's
+    single shared test loop, which would never reproduce this. The fake
+    server runs on its own persistently-running background-thread loop
+    (via run_forever) so it keeps accepting connections from whichever
+    client-side loop is calling it -- run_until_complete(server.start())
+    alone would leave the server's loop idle the instant start() returns,
+    with nothing left pumping it to accept the client's real connections.
+    """
+    import threading
+
+    server = FakeAnytypeServer()
+    server_loop = asyncio.new_event_loop()
+    server_thread = threading.Thread(target=server_loop.run_forever, daemon=True)
+    server_thread.start()
+    asyncio.run_coroutine_threadsafe(server.start(), server_loop).result()
+
+    config = AnytypeConfig(api_key="test-key", base_url=server.base_url, space_id="space1")
+    client = AnytypeClient(config)
+    server.set_response("GET", "/v1/spaces/space1/chats", payload={"data": []})
+
+    try:
+        loop_one = asyncio.new_event_loop()
+        session_one = loop_one.run_until_complete(client._ensure_session())
+        result_one = loop_one.run_until_complete(client.list_chats())
+        loop_one.close()
+
+        loop_two = asyncio.new_event_loop()
+        session_two = loop_two.run_until_complete(client._ensure_session())
+        result_two = loop_two.run_until_complete(client.list_chats())
+        loop_two.close()
+    finally:
+        asyncio.run_coroutine_threadsafe(server.stop(), server_loop).result()
+        server_loop.call_soon_threadsafe(server_loop.stop)
+        server_thread.join(timeout=5)
+        server_loop.close()
+
+    assert result_one == []
+    assert result_two == []
+    assert session_one is not session_two
 
 
 async def test_stream_chat_messages_overrides_session_default_timeout(fake_server, mocker):
