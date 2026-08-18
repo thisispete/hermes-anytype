@@ -39,6 +39,15 @@ logger = logging.getLogger(__name__)
 _RECONNECT_BASE_DELAY = 2.0
 _RECONNECT_MAX_DELAY = 60.0
 _SENT_ID_CACHE_SIZE = 500
+_SEEN_ID_CACHE_SIZE = 500
+# How many of a chat's existing messages to fetch when priming the
+# already-seen set (see _run_chat's priming step, docs/design.md Section
+# 4.1, beta round 13). A confirmed real API behavior: a fresh SSE
+# connection replays the chat's entire message history as message_added
+# events, not just genuinely new ones -- without priming, that replay
+# (including on every future reconnect, not just the first connection)
+# would be reprocessed as if new every time.
+_PRIME_MESSAGE_LIMIT = 200
 
 
 def check_anytype_requirements() -> bool:
@@ -117,6 +126,7 @@ class AnytypeAdapter(BasePlatformAdapter):
 
         self._tasks: list[asyncio.Task] = []
         self._recently_sent_ids: list[str] = []
+        self._seen_incoming_ids: list[str] = []
         self._closing = False
 
     # ------------------------------------------------------------------
@@ -197,9 +207,42 @@ class AnytypeAdapter(BasePlatformAdapter):
         if len(self._recently_sent_ids) > _SENT_ID_CACHE_SIZE:
             self._recently_sent_ids = self._recently_sent_ids[-_SENT_ID_CACHE_SIZE:]
 
+    def _remember_seen(self, message_id: str) -> None:
+        self._seen_incoming_ids.append(message_id)
+        if len(self._seen_incoming_ids) > _SEEN_ID_CACHE_SIZE:
+            self._seen_incoming_ids = self._seen_incoming_ids[-_SEEN_ID_CACHE_SIZE:]
+
+    async def _prime_seen_messages(self, chat_id: str) -> None:
+        """Pre-populate the seen-message set from the chat's current
+        history before ever opening the live stream (docs/design.md
+        Section 4.1, beta round 13) -- confirmed real: a fresh SSE
+        connection replays the entire message history as message_added
+        events, not just genuinely new ones. Without this, every one of
+        those replayed messages -- including on every future reconnect,
+        not just the very first connection -- would be reprocessed as if
+        it just arrived. Best-effort: if this fails, connect() still
+        proceeds (logged, not fatal) since an empty seen-set just means
+        the first stream's replay gets processed once, not that the
+        adapter can't run at all.
+        """
+        try:
+            messages = await self.client.get_chat_messages(chat_id, limit=_PRIME_MESSAGE_LIMIT)
+        except Exception:
+            logger.exception(
+                "Anytype: failed to prime seen-message set for chat %s -- "
+                "its current history may get reprocessed once on first connect",
+                chat_id,
+            )
+            return
+        for message in messages:
+            message_id = message.get("id")
+            if message_id:
+                self._remember_seen(message_id)
+
     async def _run_chat(self, chat_id: str) -> None:
         backoff = _RECONNECT_BASE_DELAY
         require_mention = self._require_mention and chat_id not in self._free_response_chats
+        await self._prime_seen_messages(chat_id)
         while not self._closing:
             try:
                 async for event in self.client.stream_chat_messages(chat_id):
@@ -256,6 +299,15 @@ class AnytypeAdapter(BasePlatformAdapter):
         author_id = message.get("creator") or message.get("creator_id") or ""
         if self._account_id and self._account_id in author_id:
             return
+        # beta round 13: a fresh SSE connection (including every future
+        # reconnect, not just the first) replays the chat's entire message
+        # history -- this catches genuine backlog replays of someone
+        # else's already-processed messages, distinct from the self-authored
+        # case above.
+        if message_id and message_id in self._seen_incoming_ids:
+            return  # already processed -- a replayed/re-delivered message, not a new one
+        if message_id:
+            self._remember_seen(message_id)
         # Confirmed live (beta round 11, docs/design.md Section 4.1): message
         # text/marks are nested under "content", not top-level fields -- an
         # earlier version of this code read message.get("text") directly,
